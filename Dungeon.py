@@ -368,6 +368,10 @@ class Game:
 
         sym = self._get((nr, nc))
 
+        if sym == OGRE:
+            print(f"  ✗ No podés abrir un orco. Usá 'atacar {direction}' para combatir.")
+            return False
+
         if sym == CHEST:
             cofre = self.cofre_en(nr, nc)
             if cofre:
@@ -522,18 +526,22 @@ ESQUEMAS:
 2) Movimiento hacia el objeto más cercano:
 {"accion":"mover","objetivo":"cofre"}
 
-3) Abrir objeto adyacente:
+3) Atacar en una dirección (hacia un orco adyacente):
+{"accion":"atacar","direccion":"izquierda"}
+
+4) Abrir objeto adyacente (cofre o puerta, NO orcos):
 {"accion":"abrir","direccion":"derecha"}
 
-4) Esperar:
+5) Esperar:
 {"accion":"esperar"}
 
-REGLAS:
+REGLAS CRÍTICAS:
 - Verbos de movimiento (ir, ve, muévete, camina, avanza, desplázate, etc.) → "mover".
-- Abrir/interactuar/usar → "abrir".
+- Atacar/golpear/pegar/herir/agredir + dirección → "atacar" con esa dirección. NUNCA uses "abrir" para esto.
+- Abrir/interactuar/usar/inspeccionar → "abrir". Solo para cofres y puertas, NUNCA para orcos.
 - Esperar/pasar/descansar → "esperar".
 - Direcciones válidas: arriba, abajo, izquierda, derecha, norte, sur, este, oeste.
-- Objetivos válidos: cofre, orco, ogro, puerta, salida, llave.
+- Objetivos válidos para mover: cofre, orco, ogro, puerta, salida, llave.
 - Si mencionan un objeto destino → formato 2.
 - Si mencionan pasos/casillas/número → formato 1.
 - Si no entiendes: {"accion":"desconocido"}
@@ -848,6 +856,48 @@ def ejecutar(game: Game, data: dict) -> bool:
         else:
             print("  ✗ 'mover' sin objetivo ni pasos.")
             return False
+
+    # ── ATACAR (desde el mapa, dirección explícita) ───────
+    elif accion == "atacar":
+        dir_raw  = str(data.get("direccion", "")).lower().strip()
+        dir_norm = DIRECCION_ALIAS.get(dir_raw, dir_raw)
+        DELTAS   = {"arriba": (-1,0), "abajo": (1,0),
+                    "izquierda": (0,-1), "derecha": (0,1),
+                    "norte": (-1,0), "sur": (1,0),
+                    "oeste": (0,-1), "este": (0,1)}
+
+        if dir_norm not in DELTAS and dir_raw not in DELTAS:
+            print(f"  ✗ Dirección de ataque inválida: '{dir_raw}'")
+            print(f"     Válidas: arriba, abajo, izquierda, derecha")
+            return False
+
+        dr, dc = DELTAS.get(dir_norm) or DELTAS.get(dir_raw)
+        j = game.jugador
+        nr, nc = j.r + dr, j.c + dc
+
+        if not game._dentro(nr, nc):
+            print(f"  ✗ No hay nada que atacar fuera del tablero.")
+            return False
+
+        sym = game._get((nr, nc))
+        if sym != OGRE:
+            if sym == CHEST:
+                print(f"  ✗ No podés atacar un cofre. Usá 'abrir {dir_norm}'.")
+            elif sym == DOOR:
+                print(f"  ✗ No podés atacar la puerta. Usá 'abrir {dir_norm}'.")
+            elif sym == EMPTY:
+                print(f"  ✗ No hay nada en esa dirección ({dir_norm}).")
+            else:
+                print(f"  ✗ No hay un orco en esa dirección ({dir_norm}), hay '{sym}'.")
+            return False
+
+        orco = game.orco_en(nr, nc)
+        if orco:
+            print(f"  ⚔ Atacás al Orco {orco.idx} en ({nr},{nc}). ¡Iniciando combate con prioridad tuya!")
+            combate(game, orco, primer_ataque="jugador")
+            return True
+
+        return False
 
     # ── ABRIR ─────────────────────────────────────────────
     elif accion == "abrir":
