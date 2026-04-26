@@ -47,7 +47,6 @@ Los orcos hacen una sola acción por turno: o se mueven, o atacan, nunca ambas
 # Requisitos
 
 Python 3.12+
-Instalar Ollama curl -fsSL https://ollama.com/install.sh | sh
 Ollama corriendo localmente (ollama serve)
 Al menos un modelo instalado. Probados:
 
