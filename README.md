@@ -47,6 +47,7 @@ Los orcos hacen una sola acción por turno: o se mueven, o atacan, nunca ambas
 # Requisitos
 
 Python 3.12+
+Instalar Ollama curl -fsSL https://ollama.com/install.sh | sh
 Ollama corriendo localmente (ollama serve)
 Al menos un modelo instalado. Probados:
 
@@ -62,13 +63,8 @@ git clone https://github.com/Elias-Roman/Autum-Of-Code-2026-Tema-2.git
 # 2. Instalar dependencias de Python
 pip install requests
 
-# 3. Instalar e iniciar Ollama (y modelos)
-curl -fsSL https://ollama.com/install.sh | sh
+# 3.Iniciar Ollama
 ollama serve
-# 3.1 Instalacion de modelos de IA para Ollama
-ollama pull llama3
-ollama pull phi3
-ollama pull mistral
 
 # 4. Configurar el modelo en Dungeon.py (línea ~14)
 OLLAMA_MODEL = "mistral"   # o "llama3", "phi", etc.
