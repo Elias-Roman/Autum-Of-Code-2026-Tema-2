@@ -60,7 +60,7 @@ bash# 1. Clonar el repositorio
 git clone https://github.com/Elias-Roman/Autum-Of-Code-2026-Tema-2.git
 
 # 2. Instalar dependencias de Python
-pip install requests
+pip install -r requirements.txt
 
 # 3.Iniciar Ollama
 ollama serve
