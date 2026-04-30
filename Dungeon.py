@@ -11,7 +11,7 @@ import os
 # ═══════════════════════════════════════════════════════════
 SIZE         = 7
 OLLAMA_URL   = "http://localhost:11434/api/generate"
-OLLAMA_MODEL = "mistral"
+OLLAMA_MODEL = os.getenv('OLLAMA_MODEL') or "mistral"
 
 # Símbolos del tablero (1 char para alineación perfecta)
 PLAYER = "K"   # Caballero
