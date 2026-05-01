@@ -1,10 +1,13 @@
-import random
 import requests
 import json
 import re
 import sys
 import time
 import os
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
 
 # ═══════════════════════════════════════════════════════════
 #  CONFIGURACIÓN
@@ -13,16 +16,15 @@ SIZE         = 7
 OLLAMA_URL   = "http://localhost:11434/api/generate"
 OLLAMA_MODEL = "mistral"
 
-# Símbolos del tablero (1 char para alineación perfecta)
-PLAYER = "K"   # Caballero
-CHEST  = "C"   # Cofre
-OGRE   = "O"   # Orco
-DOOR   = "D"   # Puerta (bloqueada)
-KEY    = "Y"   # Llave
+PLAYER = "K"
+CHEST  = "C"
+OGRE   = "O"
+DOOR   = "D"
+KEY    = "L"
 EMPTY  = "."
 
 # ═══════════════════════════════════════════════════════════
-#  ENTIDADES
+#  ENTIDADES  (spec §4.2)
 # ═══════════════════════════════════════════════════════════
 
 class Jugador:
@@ -41,12 +43,11 @@ class Jugador:
 
 
 class Orco:
-    def __init__(self, r, c, idx=1, tiene_llave=False):
-        self.r          = r
-        self.c          = c
-        self.hp         = float(random.choice([1, 2]))
-        self.idx        = idx
-        self.tiene_llave = tiene_llave   # al menos un orco porta la llave
+    def __init__(self, r, c, idx=1, hp=2.0):
+        self.r           = r
+        self.c           = c
+        self.hp          = float(hp)
+        self.idx         = idx
 
     @property
     def pos(self): return (self.r, self.c)
@@ -66,19 +67,32 @@ class Cofre:
 
 class Puerta:
     def __init__(self, r, c):
+        self.r = r
+        self.c = c
+
+    @property
+    def pos(self): return (self.r, self.c)
+
+
+class Llave:
+    def __init__(self, r, c):
         self.r        = r
         self.c        = c
-        self.abierto  = False   # se abre solo si el jugador tiene la llave
+        self.recogida = False
 
     @property
     def pos(self): return (self.r, self.c)
 
 
 # ═══════════════════════════════════════════════════════════
-#  ESTADO DEL JUEGO
+#  ESTADO DEL JUEGO  (spec §4.1)
 # ═══════════════════════════════════════════════════════════
 
-class Game:
+class Estado:
+    """
+    Única fuente de verdad del juego.
+    Tablero 2D + todas las entidades.
+    """
     def __init__(self):
         self.board        = [[EMPTY] * SIZE for _ in range(SIZE)]
         self.under_player = EMPTY
@@ -87,76 +101,28 @@ class Game:
         self.orcos   = []
         self.cofres  = []
         self.puerta  = None
+        self.llave   = None
 
         self.nivel_terminado = False
         self.victoria        = False
 
-        self._generar_nivel()
+        self._cargar_nivel_fijo()
 
-    # ── helpers de posición ───────────────────────────────
-    def _border_cells(self):
-        cells = []
-        for c in range(SIZE):
-            cells += [(0, c), (SIZE - 1, c)]
-        for r in range(1, SIZE - 1):
-            cells += [(r, 0), (r, SIZE - 1)]
-        return cells
+    # ── nivel fijo ────────────────────────────────────────
+    def _cargar_nivel_fijo(self):
+        self.jugador = Jugador(3, 3)
+        self.puerta  = Puerta(0, 3)
+        self.llave   = Llave(5, 1)
+        self.orcos   = [Orco(2, 5, idx=1, hp=2.0), Orco(5, 5, idx=2, hp=1.0)]
+        self.cofres  = [Cofre(3, 1)]
 
-    def _random_empty_border(self):
-        opts = [p for p in self._border_cells() if self._get(p) == EMPTY]
-        if not opts:
-            raise RuntimeError("Sin celdas de borde libres para la puerta.")
-        return random.choice(opts)
-
-    def _random_empty_inner(self):
-        for _ in range(10_000):
-            r = random.randint(1, SIZE - 2)
-            c = random.randint(1, SIZE - 2)
-            if self.board[r][c] == EMPTY:
-                return r, c
-        raise RuntimeError("Sin celdas interiores libres.")
-
-    def _place_many_inner(self, symbol, count):
-        placed, attempts = 0, 0
-        while placed < count and attempts < 1000:
-            r = random.randint(0, SIZE - 1)
-            c = random.randint(0, SIZE - 1)
-            if self.board[r][c] == EMPTY:
-                self.board[r][c] = symbol
-                placed += 1
-            attempts += 1
-
-    # ── generación del nivel ──────────────────────────────
-    def _generar_nivel(self):
-        # Jugador
-        r, c = self._random_empty_inner()
-        self.jugador = Jugador(r, c)
-        self.board[r][c] = PLAYER
-
-        # Puerta bloqueada en el borde
-        r, c = self._random_empty_border()
-        self.puerta = Puerta(r, c)
-        self.board[r][c] = DOOR
-
-        # Orcos (1-2); el primero siempre porta la llave
-        num_orcos = random.randint(1, 2)
-        llave_asignada = False
-        for i in range(1, num_orcos + 1):
-            r, c = self._random_empty_inner()
-            porta_llave = not llave_asignada   # el orco 1 siempre tiene la llave
-            o = Orco(r, c, idx=i, tiene_llave=porta_llave)
-            self.orcos.append(o)
-            self.board[r][c] = OGRE
-            if porta_llave:
-                llave_asignada = True
-
-        # Cofres (0-2)
-        num_cofres = random.randint(0, 2)
-        for _ in range(num_cofres):
-            r, c = self._random_empty_inner()
-            cf = Cofre(r, c)
-            self.cofres.append(cf)
-            self.board[r][c] = CHEST
+        self.board[self.jugador.r][self.jugador.c] = PLAYER
+        self.board[self.puerta.r][self.puerta.c] = DOOR
+        self.board[self.llave.r][self.llave.c] = KEY
+        for orco in self.orcos:
+            self.board[orco.r][orco.c] = OGRE
+        for cofre in self.cofres:
+            self.board[cofre.r][cofre.c] = CHEST
 
     # ── acceso al tablero ─────────────────────────────────
     def _set(self, pos, symbol):
@@ -188,21 +154,18 @@ class Game:
                         best_dist, best_pos = dist, (r, c)
         return best_pos, best_dist
 
-    # ── visualización ─────────────────────────────────────
+    # ── HUD ───────────────────────────────────────────────
     def print_board(self):
         j = self.jugador
         orcos_vivos = [o for o in self.orcos if o.vivo]
 
         print("\n" + "─" * 44)
-        hp_bar = _barra(j.hp, 3.0, 10)
-        llave_str = "🗝 LLAVE" if j.tiene_llave else "  sin llave"
-        print(f"  HP: {hp_bar} {j.hp:.1f}/3.0   Oro: {j.oro}   {llave_str}")
+        bj = _barra(j.hp, 3.0, 10)
+        llave_str = "🗝 Llave" if j.tiene_llave else "sin llave"
+        print(f"  HP: {bj} {j.hp:.1f}/3.0   Oro: {j.oro}   {llave_str}")
         for o in orcos_vivos:
-            ob  = _barra(o.hp, 2.0, 10)
-            lk  = " [🗝]" if o.tiene_llave else ""
-            print(f"  Orco {o.idx}{lk}: {ob} {o.hp:.1f}  pos({o.r},{o.c})")
-        puerta_str = "ABIERTA" if self.puerta.abierto else "BLOQUEADA"
-        print(f"  Puerta: {puerta_str}  pos({self.puerta.r},{self.puerta.c})")
+            bo  = _barra(o.hp, 2.0, 10)
+            print(f"  Orco {o.idx}: {bo} {o.hp:.1f}  pos({o.r},{o.c})")
         print("─" * 44)
 
         print("      " + "  ".join(str(c) for c in range(SIZE)))
@@ -211,254 +174,241 @@ class Game:
         for r, row in enumerate(self.board):
             print(f"  {r} | " + "  ".join(row) + "  |")
         print(sep)
-        print(f"  K=Caballero  O=Orco  C=Cofre  D=Puerta  Y=Llave  .=Vacío")
+        print(f"  K=Caballero  O=Orco  C=Cofre  D=Puerta  L=Llave  .=Vacío")
         print(f"  Caballero → fila {j.r}, col {j.c}\n")
 
-    # ── movimiento hacia objetivo ─────────────────────────
-    def move_toward_target(self, symbol):
-        target_pos, dist = self.find_nearest(symbol)
-        if target_pos is None:
-            print(f"  ✗ No hay '{symbol}' en el tablero.")
-            return False, False   # (movido, combate_iniciado)
 
-        tr, tc = target_pos
-        print(f"  → Objetivo '{symbol}' en ({tr},{tc}), dist {dist}")
+# ═══════════════════════════════════════════════════════════
+#  VALIDACIÓN SIMBÓLICA  (spec §4.4)
+#  Funciones puras: no modifican el estado.
+# ═══════════════════════════════════════════════════════════
 
-        steps = 0
-        while True:
-            pr, pc = self.jugador.pos
+DIRS_8 = {            # spec §4.3 — 8 direcciones numeradas
+    "arriba":             (-1,  0),
+    "abajo":              ( 1,  0),
+    "izquierda":          ( 0, -1),
+    "derecha":            ( 0,  1),
+    "arriba-izquierda":   (-1, -1),
+    "arriba-derecha":     (-1,  1),
+    "abajo-izquierda":    ( 1, -1),
+    "abajo-derecha":      ( 1,  1),
+}
 
-            if (pr, pc) == (tr, tc):
-                break
+DIRS_4 = {"arriba", "abajo", "izquierda", "derecha"}   # para abrir
 
-            nr, nc = pr, pc
-            if pr != tr:
-                nr += 1 if pr < tr else -1
-            elif pc != tc:
-                nc += 1 if pc < tc else -1
 
-            next_sym = self._get((nr, nc))
+def _celda_destino(entidad, direccion):
+    """Devuelve (nr, nc) tras aplicar la dirección desde la posición de la entidad."""
+    dr, dc = DIRS_8[direccion]
+    return entidad.r + dr, entidad.c + dc
 
-            # Llegaría al lado del orco → iniciar combate (jugador atacó primero)
-            if (nr, nc) == (tr, tc) and next_sym == OGRE:
-                print(f"  ✓ Llegaste junto al objetivo.")
-                return True, True   # combate_iniciado = True
 
-            # Llegaría al lado de cofre → detenerse
-            if (nr, nc) == (tr, tc) and next_sym == CHEST:
-                print(f"  ✓ Llegaste junto al cofre en ({pr},{pc}).")
-                return True, False
+def validar(estado: Estado, entidad, accion: dict) -> bool:
+    """
+    Devuelve True si la acción es realizable en el estado actual.
+    NO modifica el estado.
+    """
+    tipo = accion.get("tipo")
 
-            # Puerta cerrada en el camino → colisión
-            if next_sym == DOOR and not self.puerta.abierto:
-                print(f"  🔒 La puerta está bloqueada en ({nr},{nc}). Abrila primero con 'abrir <dirección>'.")
-                return True, False
+    if tipo == "esperar":
+        return True
 
-            # Bloqueado por otro objeto en el camino
-            if next_sym in (OGRE, CHEST):
-                print(f"  ! Camino bloqueado por '{next_sym}' en ({nr},{nc}).")
-                return True, False
+    if tipo == "mover":
+        d = accion.get("direccion")
+        if d not in DIRS_8:
+            return False
+        nr, nc = _celda_destino(entidad, d)
+        if not estado._dentro(nr, nc):
+            return False
+        sym = estado._get((nr, nc))
+        # Puerta y llave no bloquean: se activan al pisarlas.
+        if isinstance(entidad, Jugador):
+            return sym in (EMPTY, DOOR, KEY)
+        else:  # Orco: solo EMPTY
+            return sym == EMPTY
 
-            # Moverse
-            self._set(self.jugador.pos, self.under_player)
-            self.jugador.r, self.jugador.c = nr, nc
-            self.under_player = next_sym
-            self._set(self.jugador.pos, PLAYER)
-            steps += 1
+    if tipo == "atacar":
+        d = accion.get("direccion")
+        if d not in DIRS_8:
+            return False
+        nr, nc = _celda_destino(entidad, d)
+        if not estado._dentro(nr, nc):
+            return False
+        sym = estado._get((nr, nc))
+        return sym == (OGRE if isinstance(entidad, Jugador) else PLAYER)
 
-            # Recoge llave si la pisa
-            if next_sym == KEY:
-                self._recoger_llave()
+    if tipo == "abrir":
+        d = accion.get("direccion")
+        if d not in DIRS_4:
+            return False
+        nr, nc = _celda_destino(entidad, d)
+        if not estado._dentro(nr, nc):
+            return False
+        sym = estado._get((nr, nc))
+        return sym == CHEST   # solo cofres; la puerta se maneja al pisar
 
-            # Entrar a la puerta abierta
-            if next_sym == DOOR:
-                print(f"  ★ ¡Has salido del calabozo por la puerta! ★")
-                self.nivel_terminado = True
-                self.victoria = True
-                return True, False
+    if tipo == "defensa":
+        return isinstance(entidad, Jugador)
 
-            if steps > SIZE * SIZE * 2:
-                print("  ✗ No se pudo alcanzar el objetivo.")
-                return True, False
+    return False
 
-        return True, False
 
-    # ── movimiento por pasos ──────────────────────────────
-    def move_steps(self, direction, amount):
-        ALIAS  = {"norte": "arriba", "sur": "abajo",
-                  "oeste": "izquierda", "este": "derecha"}
-        direction = ALIAS.get(direction, direction)
-        VALIDAS = {"arriba", "abajo", "izquierda", "derecha"}
-        if direction not in VALIDAS:
-            print(f"  ✗ Dirección inválida: '{direction}'")
-            return False, False
+def probar(estado: Estado, entidad, accion: dict) -> dict:
+    """
+    Devuelve un resumen del estado hipotético si se ejecutara la acción.
+    NO modifica el estado real.
+    """
+    if not validar(estado, entidad, accion):
+        return {"valida": False}
 
-        moved = 0
-        combate_iniciado = False
+    tipo = accion.get("tipo")
+    resultado = {"valida": True, "tipo": tipo}
 
-        for _ in range(amount):
-            pr, pc = self.jugador.pos
-            nr, nc = pr, pc
+    if tipo == "mover":
+        nr, nc = _celda_destino(entidad, accion["direccion"])
+        resultado["nueva_pos"] = (nr, nc)
+        resultado["celda_destino"] = estado._get((nr, nc))
 
-            if   direction == "arriba"    and pr > 0:        nr -= 1
-            elif direction == "abajo"     and pr < SIZE - 1: nr += 1
-            elif direction == "izquierda" and pc > 0:        nc -= 1
-            elif direction == "derecha"   and pc < SIZE - 1: nc += 1
+    if tipo == "atacar":
+        nr, nc = _celda_destino(entidad, accion["direccion"])
+        objetivo = estado.orco_en(nr, nc) if isinstance(entidad, Jugador) else None
+        if objetivo:
+            resultado["objetivo_hp_post"] = max(objetivo.hp - 1.0, 0)
+            resultado["objetivo_muere"]   = objetivo.hp <= 1.0
+
+    return resultado
+
+
+# ═══════════════════════════════════════════════════════════
+#  EJECUCIÓN SIMBÓLICA  (spec §4.4)
+# ═══════════════════════════════════════════════════════════
+
+def ejecutar_accion(estado: Estado, entidad, accion: dict) -> bool:
+    """
+    Ejecuta la acción sobre el estado.
+    Acciones inválidas → se convierten en 'esperar' (spec: no falla, devuelve False).
+    Devuelve True si se ejecutó la acción pedida, False si se convirtió en esperar.
+    """
+    if not validar(estado, entidad, accion):
+        return False   # → esperar implícito
+
+    tipo = accion.get("tipo")
+
+    if tipo == "esperar":
+        return True
+
+    if tipo == "defensa":
+        estado.jugador.defendiendo = True
+        return True
+
+    if tipo == "mover":
+        d = accion["direccion"]
+        nr, nc = _celda_destino(entidad, d)
+        sym = estado._get((nr, nc))
+
+        # ── Movimiento normal
+        estado._set(entidad.pos, estado.under_player if isinstance(entidad, Jugador) else EMPTY)
+        entidad.r, entidad.c = nr, nc
+        if isinstance(entidad, Jugador):
+            if sym == KEY:
+                estado.jugador.tiene_llave = True
+                if estado.llave:
+                    estado.llave.recogida = True
+                estado.under_player = EMPTY
+                print("  🗝 Recogiste la llave.")
             else:
-                print(f"  ! Límite del mapa en ({pr},{pc}).")
-                break
+                estado.under_player = sym
+            estado._set(entidad.pos, PLAYER)
+            if sym == DOOR and estado.jugador.tiene_llave:
+                print(f"  ★ ¡Has cruzado la puerta con la llave! Nivel completado.")
+                estado.nivel_terminado = True
+                estado.victoria = True
+        else:
+            estado._set(entidad.pos, OGRE)
+        return True
 
-            next_sym = self._get((nr, nc))
+    if tipo == "atacar":
+        d = accion["direccion"]
+        nr, nc = _celda_destino(entidad, d)
 
-            # Intentar entrar a celda con orco → combate (jugador atacó primero)
-            if next_sym == OGRE:
-                print(f"  ⚔ ¡Entraste en contacto con un orco!")
-                combate_iniciado = True
-                break
+        if isinstance(entidad, Jugador):
+            orco = estado.orco_en(nr, nc)
+            if orco:
+                orco.hp = max(round(orco.hp - 1.0, 1), 0.0)
+                if not orco.vivo:
+                    print(f"  ⚔  Orco {orco.idx} derrotado.")
+                    estado.board[nr][nc] = EMPTY
+                else:
+                    print(f"  ⚔  Golpe al Orco {orco.idx}. HP: {orco.hp:.1f}")
+        else:
+            # Orco ataca jugador
+            j   = estado.jugador
+            dmg = 0.5 if j.defendiendo else 1.0
+            j.hp = max(round(j.hp - dmg, 1), 0.0)
+            print(f"  ⚔  Orco {entidad.idx} ataca. Daño: {dmg}  HP: {j.hp:.1f}/3.0")
+            if not j.vivo:
+                estado.nivel_terminado = True
+                estado.victoria = False
+        return True
 
-            # Bloqueado por cofre
-            if next_sym == CHEST:
-                print(f"  ! Bloqueado por cofre en ({nr},{nc}). Usá 'abrir'.")
-                break
+    if tipo == "abrir":
+        d = accion["direccion"]
+        nr, nc = _celda_destino(entidad, d)
+        cofre = estado.cofre_en(nr, nc)
+        if cofre:
+            cofre.abierto = True
+            estado.board[nr][nc] = EMPTY
+            estado.jugador.oro += 1
+            print(f"  📦 ¡Cofre abierto! Oro: {estado.jugador.oro}")
+        return True
 
-            # Puerta cerrada → colisión, no se puede pisar
-            if next_sym == DOOR and not self.puerta.abierto:
-                print(f"  🔒 La puerta está bloqueada. Abrila primero con 'abrir <dirección>'.")
-                break
+    return True
 
-            self._set(self.jugador.pos, self.under_player)
-            self.jugador.r, self.jugador.c = nr, nc
-            self.under_player = next_sym
-            self._set(self.jugador.pos, PLAYER)
-            moved += 1
 
-            # Recoge llave si la pisa
-            if next_sym == KEY:
-                self._recoger_llave()
+# ═══════════════════════════════════════════════════════════
+#  IA DEL ORCO  (spec §4.1: si puede atacar ataca, sino se mueve)
+# ═══════════════════════════════════════════════════════════
 
-            # Entrar a la puerta (solo si está abierta, chequeado arriba)
-            if next_sym == DOOR:
-                print(f"  ★ ¡Has salido del calabozo por la puerta! ★")
-                self.nivel_terminado = True
-                self.victoria = True
-                break
+def turno_orcos(estado: Estado):
+    """
+    Cada orco hace UNA acción (spec):
+      - Si ya adyacente (4 dirs) → marca para combate (no aplica daño aquí).
+      - Si no → se mueve un paso hacia el jugador (4 dirs).
+        Aunque quede adyacente tras moverse, NO ataca ese mismo turno.
+    Devuelve el orco que iniciará combate, o None.
+    """
+    DELTAS_4 = [(-1,0),(1,0),(0,-1),(0,1)]
+    j = estado.jugador
+    orco_atacante = None
 
-        if moved:
-            print(f"  ✓ Movido {moved} paso(s) {direction} → ({self.jugador.r},{self.jugador.c})")
-        return moved > 0 or combate_iniciado, combate_iniciado
+    for orco in estado.orcos:
+        if not orco.vivo or estado.nivel_terminado:
+            continue
 
-    # ── abrir cofre o puerta ──────────────────────────────
-    def abrir_en(self, direction):
-        ALIAS  = {"norte": "arriba", "sur": "abajo",
-                  "oeste": "izquierda", "este": "derecha"}
-        direction = ALIAS.get(direction, direction)
-        DELTAS_4 = {"arriba": (-1,0), "abajo": (1,0),
-                    "izquierda": (0,-1), "derecha": (0,1)}
+        jr, jc = j.pos
+        ya_adj = any(orco.r + dr == jr and orco.c + dc == jc for dr, dc in DELTAS_4)
 
-        if direction not in DELTAS_4:
-            print(f"  ✗ Solo se puede abrir en 4 direcciones cardinales.")
-            return False
+        if ya_adj:
+            if orco_atacante is None:
+                orco_atacante = orco   # solo el primero inicia combate
+        else:
+            # Moverse hacia el jugador
+            mejor, mejor_dist = None, abs(orco.r - jr) + abs(orco.c - jc)
+            for dr, dc in DELTAS_4:
+                nr, nc = orco.r + dr, orco.c + dc
+                if not estado._dentro(nr, nc) or estado.board[nr][nc] != EMPTY:
+                    continue
+                dist = abs(nr - jr) + abs(nc - jc)
+                if dist < mejor_dist:
+                    mejor_dist, mejor = dist, (dr, dc)
+            if mejor:
+                estado.board[orco.r][orco.c] = EMPTY
+                orco.r += mejor[0]
+                orco.c += mejor[1]
+                estado.board[orco.r][orco.c] = OGRE
 
-        dr, dc = DELTAS_4[direction]
-        nr, nc = self.jugador.r + dr, self.jugador.c + dc
-
-        if not self._dentro(nr, nc):
-            print("  ✗ Fuera del tablero.")
-            return False
-
-        sym = self._get((nr, nc))
-
-        if sym == OGRE:
-            print(f"  ✗ No podés abrir un orco. Usá 'atacar {direction}' para combatir.")
-            return False
-
-        if sym == CHEST:
-            cofre = self.cofre_en(nr, nc)
-            if cofre:
-                cofre.abierto = True
-                self.board[nr][nc] = EMPTY
-                self.jugador.oro += 1
-                print(f"  📦 ¡Cofre abierto! Oro total: {self.jugador.oro}")
-                return True
-
-        if sym == DOOR:
-            if not self.jugador.tiene_llave:
-                print(f"  🔒 La puerta está bloqueada. Necesitás la llave.")
-                print(f"     Buscá al orco que la tiene y derrótalo primero.")
-                return False
-            self.puerta.abierto = True
-            self.board[nr][nc] = DOOR   # símbolo igual pero lógicamente abierta
-            print(f"  🚪 ¡Puerta abierta con la llave! Movete hacia ella para salir.")
-            return True
-
-        if sym == KEY:
-            self._recoger_llave()
-            return True
-
-        print(f"  ✗ No hay nada que abrir en esa dirección (hay '{sym}').")
-        return False
-
-    # ── recoger llave ─────────────────────────────────────
-    def _recoger_llave(self):
-        self.jugador.tiene_llave = True
-        print(f"  🗝  ¡Recogiste la llave! Ahora podés abrir la puerta.")
-
-    # ── turno de la IA de los orcos ───────────────────────
-    def turno_orcos(self):
-        """
-        Cada orco hace UNA sola acción por turno:
-          - Si ya está adyacente al jugador → inicia combate (orco tiene prioridad).
-          - Si no está adyacente → se mueve un paso hacia el jugador.
-            Si tras moverse queda adyacente, el combate ocurrirá en el SIGUIENTE turno
-            (el movimiento agotó su acción).
-        Devuelve el orco que iniciará combate, o None.
-        """
-        DELTAS_4 = [(-1,0),(1,0),(0,-1),(0,1)]
-        j = self.jugador
-        orco_atacante = None
-
-        for orco in self.orcos:
-            if not orco.vivo or self.nivel_terminado:
-                continue
-
-            jr, jc = j.pos
-            ya_adyacente = any(
-                orco.r + dr == jr and orco.c + dc == jc
-                for dr, dc in DELTAS_4
-            )
-
-            if ya_adyacente:
-                # Acción de este turno: ATACAR (iniciar combate)
-                # Solo el primer orco adyacente inicia combate por turno
-                if orco_atacante is None:
-                    orco_atacante = orco
-                # Los demás orcos adyacentes esperan (ya consumieron su turno)
-            else:
-                # Acción de este turno: MOVER un paso hacia el jugador
-                mejor_dir  = None
-                mejor_dist = abs(orco.r - jr) + abs(orco.c - jc)
-                for dr, dc in DELTAS_4:
-                    nr, nc = orco.r + dr, orco.c + dc
-                    if not self._dentro(nr, nc):
-                        continue
-                    if self.board[nr][nc] != EMPTY:
-                        continue
-                    dist = abs(nr - jr) + abs(nc - jc)
-                    if dist < mejor_dist:
-                        mejor_dist = dist
-                        mejor_dir  = (dr, dc)
-
-                if mejor_dir:
-                    dr, dc = mejor_dir
-                    self.board[orco.r][orco.c] = EMPTY
-                    orco.r += dr
-                    orco.c += dc
-                    self.board[orco.r][orco.c] = OGRE
-                    # El movimiento agotó su turno; aunque ahora esté adyacente,
-                    # NO ataca hasta el próximo turno.
-
-        j.defendiendo = False
-        return orco_atacante
+    j.defendiendo = False
+    return orco_atacante
 
 
 # ═══════════════════════════════════════════════════════════
@@ -476,9 +426,9 @@ SPRITE_O     = ["  >O<  ", " \\|/   ", "  / \\  "]
 SPRITE_O_ATK = ["  >O<  ", " \\|/-- ", "  / \\  "]
 
 
-def pantalla_combate(game: Game, orco: Orco, log: str = "", orco_ataca: bool = False):
+def pantalla_combate(estado: Estado, orco: Orco, log: str = "", orco_ataca: bool = False):
     os.system("cls" if os.name == "nt" else "clear")
-    j = game.jugador
+    j = estado.jugador
     W = 54
 
     sj = SPRITE_J_DEF if j.defendiendo else SPRITE_J
@@ -489,24 +439,17 @@ def pantalla_combate(game: Game, orco: Orco, log: str = "", orco_ataca: bool = F
     print("╠" + "═" * W + "╣")
     print("║" + " " * W + "║")
     for lj, lo in zip(sj, so):
-        linea = f"  {lj}              {lo}  "
-        print("║" + linea.ljust(W) + "║")
+        print("║" + f"  {lj}              {lo}  ".ljust(W) + "║")
     print("║" + " " * W + "║")
-
     bj = _barra(j.hp,    3.0, 12)
     bo = _barra(orco.hp, 2.0, 12)
-    lk = "  [tiene llave]" if orco.tiene_llave else ""
     print("║" + f"  Caballero {bj} {j.hp:.1f}/3.0   Oro: {j.oro}".ljust(W) + "║")
-    print("║" + f"  Orco {orco.idx}    {bo} {orco.hp:.1f}/2.0{lk}".ljust(W) + "║")
+    print("║" + f"  Orco {orco.idx}    {bo} {orco.hp:.1f}/2.0".ljust(W) + "║")
     print("║" + " " * W + "║")
     print("╠" + "═" * W + "╣")
-    print("║" + "  Opciones (en lenguaje natural):".ljust(W) + "║")
-    print("║" + "    atacar  /  golpear  /  pegar".ljust(W) + "║")
-    print("║" + "    defensa  /  guardia  /  escudo".ljust(W) + "║")
-    print("║" + "    huir  /  escapar  /  retroceder".ljust(W) + "║")
+    print("║" + "  atacar  /  defensa".ljust(W) + "║")
     print("╠" + "═" * W + "╣")
-    msg = f"  {log}" if log else " "
-    print("║" + msg.ljust(W) + "║")
+    print("║" + (f"  {log}" if log else " ").ljust(W) + "║")
     print("╚" + "═" * W + "╝")
 
 
@@ -520,49 +463,39 @@ Sin texto extra, sin backticks, sin markdown.
 
 ESQUEMAS:
 
-1) Movimiento por pasos (uno o varios encadenados):
+1) Movimiento por pasos:
 {"accion":"mover","pasos":[{"direccion":"arriba","cantidad":2},{"direccion":"derecha","cantidad":3}]}
 
-2) Movimiento hacia el objeto más cercano:
+2) Moverse hacia el objeto más cercano:
 {"accion":"mover","objetivo":"cofre"}
 
-3) Atacar en una dirección (hacia un orco adyacente):
-{"accion":"atacar","direccion":"izquierda"}
-
-4) Abrir objeto adyacente (cofre o puerta, NO orcos):
+3) Abrir cofre adyacente:
 {"accion":"abrir","direccion":"derecha"}
 
-5) Esperar:
+4) Esperar:
 {"accion":"esperar"}
 
-REGLAS CRÍTICAS:
-- Verbos de movimiento (ir, ve, muévete, camina, avanza, desplázate, etc.) → "mover".
-- Atacar/golpear/pegar/herir/agredir + dirección → "atacar" con esa dirección. NUNCA uses "abrir" para esto.
-- Abrir/interactuar/usar/inspeccionar → "abrir". Solo para cofres y puertas, NUNCA para orcos.
-- Esperar/pasar/descansar → "esperar".
-- Direcciones válidas: arriba, abajo, izquierda, derecha, norte, sur, este, oeste.
-- Objetivos válidos para mover: cofre, orco, ogro, puerta, salida, llave.
-- Si mencionan un objeto destino → formato 2.
-- Si mencionan pasos/casillas/número → formato 1.
-- Si no entiendes: {"accion":"desconocido"}
+REGLAS:
+- ir/ve/muévete/camina/avanza/desplázate → "mover"
+- abrir/interactuar → "abrir" si el objetivo es un cofre
+- si el jugador pide abrir o usar la puerta → {"accion":"mover","objetivo":"puerta"}
+- esperar/pasar/descansar → "esperar"
+- Direcciones válidas: arriba, abajo, izquierda, derecha, arriba-izquierda, arriba-derecha, abajo-izquierda, abajo-derecha
+- Objetivos válidos: cofre, orco, puerta, llave
+- Si hay objeto destino → formato 2. Si hay número/pasos → formato 1.
+- Si no entendés: {"accion":"desconocido"}
 - Solo JSON."""
 
-SYSTEM_PROMPT_COMBATE = """Eres un parser de comandos para un combate en un juego de dungeons.
-El jugador está peleando contra un orco. Convierte su instrucción a JSON válido.
-Sin texto extra, sin backticks, sin markdown.
+SYSTEM_PROMPT_COMBATE = """Eres un parser de comandos de combate para un dungeon.
+Convierte la instrucción a JSON válido. Sin texto extra ni backticks.
 
-ESQUEMAS POSIBLES:
 {"accion":"atacar"}
 {"accion":"defensa"}
-{"accion":"huir"}
 {"accion":"desconocido"}
 
-REGLAS:
-- atacar: golpear, pegar, ataque, hiero, embisto, lucho, peleo, fight, attack, golpe
-- defensa: defender, defenderse, guardia, escudo, proteger, bloquear, block, me defiendo
-- huir: escapar, huida, retroceder, salir, flee, run, retirada, me voy, corro
-- Si no reconocés el comando: {"accion":"desconocido"}
-- Responde SOLO con el JSON."""
+- atacar: golpear, pegar, ataque, embisto, fight, attack
+- defensa: defender, guardia, escudo, proteger, bloquear, block
+- Solo JSON."""
 
 
 def verificar_modelo():
@@ -570,102 +503,115 @@ def verificar_modelo():
         resp = requests.get("http://localhost:11434/api/tags", timeout=5)
         resp.raise_for_status()
     except requests.exceptions.ConnectionError:
-        print("\n  ✗ ERROR: Ollama no está corriendo.")
-        print("    Inicialo con:  ollama serve")
-        print("    El juego requiere el modelo LLM para funcionar.\n")
+        print("\n  ✗ Ollama no está corriendo. Inicialo con: ollama serve\n")
         sys.exit(1)
     except requests.exceptions.RequestException as e:
-        print(f"\n  ✗ ERROR al conectar con Ollama: {e}\n")
+        print(f"\n  ✗ Error conectando con Ollama: {e}\n")
         sys.exit(1)
 
-    modelos_raw = resp.json().get("models", [])
-    nombres     = [m.get("name", "").split(":")[0] for m in modelos_raw]
+    nombres    = [m.get("name", "").split(":")[0]
+                  for m in resp.json().get("models", [])]
     modelo_base = OLLAMA_MODEL.split(":")[0]
 
     if modelo_base not in nombres:
-        print(f"\n  ✗ ERROR: El modelo '{OLLAMA_MODEL}' no está instalado.")
+        print(f"\n  ✗ Modelo '{OLLAMA_MODEL}' no instalado.")
         if nombres:
-            print(f"    Modelos disponibles: {', '.join(nombres)}")
-            print(f"    Cambiá OLLAMA_MODEL en el código por uno de esos.")
+            print(f"    Disponibles: {', '.join(nombres)}")
         else:
-            print(f"    No hay ningún modelo. Instalá con:  ollama pull {OLLAMA_MODEL}")
-        print("    El juego no puede continuar sin el modelo LLM.\n")
+            print(f"    Instalá con: ollama pull {OLLAMA_MODEL}")
         sys.exit(1)
 
-    print(f"  ✔ Modelo '{OLLAMA_MODEL}' verificado y listo.\n")
+    print(f"  ✔ Modelo '{OLLAMA_MODEL}' listo.\n")
 
 
-def llamar_llm(texto: str, system_prompt: str) -> dict | None:
-    """Llama al LLM sin fallback. Imprime tiempo de respuesta."""
+def llamar_llm_con_metricas(texto: str, system_prompt: str) -> tuple[dict | None, bool, float | None]:
+    """Llama al LLM y devuelve (data, json_valido, latencia_ms)."""
     try:
         t0 = time.perf_counter()
         resp = requests.post(
             OLLAMA_URL,
-            json={
-                "model":  OLLAMA_MODEL,
-                "stream": False,
-                "system": system_prompt,
-                "prompt": f'Instrucción: "{texto}"',
-            },
+            json={"model": OLLAMA_MODEL, "stream": False,
+                  "system": system_prompt,
+                  "prompt": f'Instrucción: "{texto}"'},
             timeout=30,
         )
         resp.raise_for_status()
         t_ms = (time.perf_counter() - t0) * 1000
         raw  = resp.json().get("response", "")
-        print(f"  ⏱  Modelo: {OLLAMA_MODEL}  |  {t_ms:.0f} ms")
-        return _parsear_json(raw)
-
+        print(f"  ⏱  {OLLAMA_MODEL}  {t_ms:.0f} ms")
+        data, json_valido = _parsear_json_con_estado(raw)
+        if not json_valido:
+            print(f"  ⚠  JSON inválido: {raw[:80]!r}")
+        return data, json_valido, t_ms
     except requests.exceptions.ConnectionError:
-        print(f"\n  ✗ Ollama dejó de responder. Turno cancelado.\n")
-        return None
+        print("  ✗ Ollama dejó de responder. Turno cancelado.")
+        return None, False, None
     except requests.exceptions.Timeout:
-        print(f"\n  ✗ Timeout ({OLLAMA_MODEL}). Turno cancelado.\n")
-        return None
+        print("  ✗ Timeout. Turno cancelado.")
+        return None, False, None
     except requests.exceptions.RequestException as e:
-        print(f"\n  ✗ Error de red: {e}. Turno cancelado.\n")
-        return None
+        print(f"  ✗ Error: {e}. Turno cancelado.")
+        return None, False, None
+
+
+def llamar_llm(texto: str, system_prompt: str) -> dict | None:
+    """Llama al LLM. Sin fallback. Imprime latencia."""
+    data, _, _ = llamar_llm_con_metricas(texto, system_prompt)
+    return data
 
 
 def _parsear_json(raw: str) -> dict:
+    data, json_valido = _parsear_json_con_estado(raw)
+    if not json_valido:
+        print(f"  ⚠  JSON inválido: {raw[:80]!r}")
+    return data
+
+
+def _parsear_json_con_estado(raw: str) -> tuple[dict, bool]:
     match = re.search(r'\{.*\}', raw, re.DOTALL)
     if match:
         try:
-            data = json.loads(match.group(0))
-            if "accion" in data:
-                return data
+            d = json.loads(match.group(0))
+            if "accion" in d:
+                return d, True
         except json.JSONDecodeError:
             pass
-    print(f"  ⚠  JSON inválido del modelo → raw: {raw[:100]!r}")
-    return {"accion": "desconocido"}
+    return {"accion": "desconocido"}, False
 
 
 # ═══════════════════════════════════════════════════════════
 #  BUCLE DE COMBATE
-#  primer_ataque: "jugador" → jugador ataca primero
-#                 "orco"    → orco ataca primero
 # ═══════════════════════════════════════════════════════════
 
-def combate(game: Game, orco: Orco, primer_ataque: str = "jugador"):
+def combate(estado: Estado, orco: Orco, primer_ataque: str = "jugador"):
     """
-    Pantalla de combate por lenguaje natural.
-    primer_ataque: "jugador" → jugador actúa primero en el bucle.
-                   "orco"    → se muestra aviso de que el orco inició, pero NO se aplica daño.
-                               El orco tendrá prioridad al final del primer turno del jugador.
-    Entrar al combate nunca baja HP por sí solo; solo define el orden.
+    primer_ataque: "jugador" | "orco"
+    Solo define quién actúa primero. NO aplica daño al abrir la pantalla.
     """
-    j   = game.jugador
-    log = ""
+    j   = estado.jugador
+    log = ("⚔ Vos iniciaste el contacto. Tenés la iniciativa."
+           if primer_ataque == "jugador"
+           else f"⚠ El Orco {orco.idx} te interceptó. Él tiene la iniciativa.")
 
-    # Aviso de quién inició el contacto (sin daño)
+    # Si el orco tiene iniciativa, su primer ataque va ANTES de que el jugador elija
     if primer_ataque == "orco":
-        log = f"⚠ ¡El Orco {orco.idx} te interceptó! Tiene la iniciativa este turno."
-    else:
-        log = f"⚔ ¡Iniciaste el combate! Tenés la iniciativa este turno."
+        pantalla_combate(estado, orco, log=log, orco_ataca=True)
+        input("\n  [ENTER para continuar]")
+        dmg  = 0.5 if j.defendiendo else 1.0
+        j.hp = max(round(j.hp - dmg, 1), 0.0)
+        log  = f"⚔ Orco {orco.idx} golpeó primero. Daño: {dmg}. Tu HP: {j.hp:.1f}"
+        pantalla_combate(estado, orco, log=log, orco_ataca=True)
+        if not j.vivo:
+            print("\n  ☠ Caíste. GAME OVER.")
+            input("  [ENTER]")
+            estado.nivel_terminado = True
+            estado.victoria = False
+            return
+        input("\n  [ENTER para continuar]")
 
-    # ── Bucle principal ───────────────────────────────────
     while orco.vivo and j.vivo:
         j.defendiendo = False
-        pantalla_combate(game, orco, log=log, orco_ataca=False)
+        pantalla_combate(estado, orco, log=log, orco_ataca=False)
 
         try:
             texto = input("\n  Tu acción: ").strip()
@@ -675,142 +621,142 @@ def combate(game: Game, orco: Orco, primer_ataque: str = "jugador"):
         if not texto:
             continue
 
-        print(f"\n  Interpretando: «{texto}»")
+        print(f"  Interpretando: «{texto}»")
         data = llamar_llm(texto, SYSTEM_PROMPT_COMBATE)
         if data is None:
-            log = "⚠ El modelo no respondió. Turno cancelado."
+            log = "⚠ Modelo sin respuesta. Turno cancelado."
             continue
 
         accion = data.get("accion", "desconocido")
 
-        # ── ATACAR ────────────────────────────────────────
         if accion == "atacar":
-            orco.hp = round(orco.hp - 1.0, 1)
+            orco.hp = max(round(orco.hp - 1.0, 1), 0.0)
             if not orco.vivo:
-                # Soltar llave si el orco la tenía
-                if orco.tiene_llave:
-                    orco.tiene_llave = False
-                    game.jugador.tiene_llave = True
-                    game.board[orco.r][orco.c] = EMPTY
-                    log = f"⚔ ¡Golpe final! Orco {orco.idx} derrotado. Recogiste la 🗝 LLAVE."
-                else:
-                    game.board[orco.r][orco.c] = EMPTY
-                    log = f"⚔ ¡Golpe final! Orco {orco.idx} derrotado."
-                pantalla_combate(game, orco, log=log, orco_ataca=False)
+                estado.board[orco.r][orco.c] = EMPTY
+                log = f"⚔ ¡Orco {orco.idx} derrotado!"
+                pantalla_combate(estado, orco, log=log)
                 input("\n  [ENTER para continuar]")
                 return
             else:
-                log = f"⚔ Golpeaste al Orco {orco.idx}. HP restante: {orco.hp:.1f}"
+                log = f"⚔ Golpeaste al Orco {orco.idx}. HP: {orco.hp:.1f}"
 
-        # ── DEFENSA ───────────────────────────────────────
         elif accion == "defensa":
             j.defendiendo = True
-            log = "🛡 En guardia. El próximo daño se reduce a la mitad."
+            log = "🛡 En guardia. Daño reducido a la mitad este turno."
 
-        # ── HUIR ──────────────────────────────────────────
-        elif accion == "huir":
-            DELTAS_4   = [(-1,0),(1,0),(0,-1),(0,1)]
-            dr_h = j.r - orco.r
-            dc_h = j.c - orco.c
-            dr_n = 0 if dr_h == 0 else (1 if dr_h > 0 else -1)
-            dc_n = 0 if dc_h == 0 else (1 if dc_h > 0 else -1)
-
-            huido      = False
-            candidatos = [(dr_n, dc_n)] + [d for d in DELTAS_4 if d != (-dr_n, -dc_n)]
-            for dr, dc in candidatos:
-                nr, nc = j.r + dr, j.c + dc
-                if game._dentro(nr, nc) and game.board[nr][nc] == EMPTY:
-                    game._set(j.pos, game.under_player)
-                    j.r, j.c       = nr, nc
-                    game.under_player = EMPTY
-                    game._set(j.pos, PLAYER)
-                    huido = True
-                    break
-
-            if huido:
-                pantalla_combate(game, orco, log=f"💨 Huiste. Caballero en ({j.r},{j.c}).", orco_ataca=False)
-                input("\n  [ENTER para continuar]")
-                return
-            else:
-                log = "⛔ No hay escapatoria. Estás acorralado."
-                continue
-
-        # ── DESCONOCIDO ───────────────────────────────────
         else:
-            log = "❓ No entendí. Intentá: 'atacar', 'defensa' o 'huir'."
+            log = "❓ No entendí. Intentá: atacar o defensa."
             continue
 
-        # ── TURNO DEL ORCO ────────────────────────────────
-        # Si el orco inició el contacto, ataca ANTES de que el jugador pueda actuar
-        # en la primera iteración (prioridad del orco en ronda 1).
+        # Turno del orco
         if orco.vivo and j.vivo:
-            # En ronda 1 con prioridad del orco: el orco ya "atacó" al moverse,
-            # así que en esta primera iteración el orco contraataca normalmente.
             dmg  = 0.5 if j.defendiendo else 1.0
-            j.hp = max(round(j.hp - dmg, 1), 0.0)   # HP nunca baja de 0
-            log += f"  |  Orco {orco.idx} contraatacó! Daño: {dmg}. Tu HP: {j.hp:.1f}"
-            pantalla_combate(game, orco, log=log, orco_ataca=True)
-
+            j.hp = max(round(j.hp - dmg, 1), 0.0)
+            log += f"  |  Orco {orco.idx} contraatacó. Daño: {dmg}. HP: {j.hp:.1f}"
+            pantalla_combate(estado, orco, log=log, orco_ataca=True)
             if not j.vivo:
-                print("\n  ☠ El caballero ha caído. GAME OVER.")
-                input("  [ENTER para continuar]")
-                game.nivel_terminado = True
-                game.victoria = False
+                print("\n  ☠ Caíste. GAME OVER.")
+                input("  [ENTER]")
+                estado.nivel_terminado = True
+                estado.victoria = False
                 return
 
 
 # ═══════════════════════════════════════════════════════════
-#  EJECUTOR DE ACCIONES EN EL MAPA
+#  INTÉRPRETE DE COMANDOS DEL MAPA
 # ═══════════════════════════════════════════════════════════
 
-ACCIONES_MOVER = {
-    "mover", "ir", "ve", "muévete", "muevete", "caminar",
-    "camina", "desplazarse", "avanzar", "avanza",
-}
-
 OBJETIVO_MAP = {
-    "cofre":  CHEST,  "cofres": CHEST,
-    "orco":   OGRE,   "orcos":  OGRE,
-    "ogro":   OGRE,   "ogros":  OGRE,
-    "puerta": DOOR,   "salida": DOOR,
+    "cofre":  CHEST,
+    "orco":   OGRE,
+    "puerta": DOOR,
     "llave":  KEY,
 }
 
-DIRECCIONES_VALIDAS = {"arriba", "abajo", "izquierda", "derecha",
-                       "norte",  "sur",   "oeste",     "este"}
-DIRECCION_ALIAS     = {"norte": "arriba", "sur": "abajo",
-                       "oeste": "izquierda", "este": "derecha"}
 
-
-def ejecutar(game: Game, data: dict) -> bool:
+def _mover_un_paso_hacia(estado: Estado, tr: int, tc: int) -> tuple[bool, bool]:
     """
-    Ejecuta la acción del jugador en el mapa.
+    Mueve el jugador un paso hacia (tr,tc).
+    Devuelve (movido, combate_iniciado).
+    """
+    j = estado.jugador
+    dr = 0 if tr == j.r else (1 if tr > j.r else -1)
+    dc = 0 if tc == j.c else (1 if tc > j.c else -1)
+
+    # Dirección canónica (solo 4 dirs para simplicidad)
+    if dr != 0 and dc != 0:
+        # diagonal: preferir fila primero
+        dc = 0
+
+    dir_str = {(-1,0):"arriba",(1,0):"abajo",(0,-1):"izquierda",(0,1):"derecha"}.get((dr,dc))
+    if not dir_str:
+        return False, False
+
+    nr, nc = j.r + dr, j.c + dc
+
+    sym = estado._get((nr, nc))
+
+    # Orco adyacente → combate, jugador tiene iniciativa
+    if sym == OGRE:
+        return True, True
+
+    ok = ejecutar_accion(estado, j, {"tipo": "mover", "direccion": dir_str})
+    return ok, False
+
+
+def interpretar_y_ejecutar(estado: Estado, data: dict) -> bool:
+    """
+    Traduce el JSON del LLM a llamadas sobre el estado.
     Devuelve True si el turno fue consumido.
     """
+    j      = estado.jugador
     accion = data.get("accion", "").lower().strip()
-    if accion in ACCIONES_MOVER:
-        accion = "mover"
 
     # ── MOVER ─────────────────────────────────────────────
     if accion == "mover":
+
+        # Hacia objetivo
         if "objetivo" in data:
             nombre  = str(data["objetivo"]).lower().strip()
             simbolo = OBJETIVO_MAP.get(nombre)
             if simbolo is None:
-                print(f"  ✗ Objetivo desconocido: '{nombre}'. Válidos: {', '.join(OBJETIVO_MAP)}")
+                print(f"  ✗ Objetivo desconocido: '{nombre}'.")
                 return False
 
-            movido, combate_iniciado = game.move_toward_target(simbolo)
+            target_pos, dist = estado.find_nearest(simbolo)
+            if target_pos is None:
+                print(f"  ✗ No hay '{nombre}' en el tablero.")
+                return False
 
-            if combate_iniciado:
-                # Jugador se acercó → él ataca primero
-                target_pos, _ = game.find_nearest(OGRE)
-                if target_pos:
-                    orco = game.orco_en(*target_pos)
+            tr, tc = target_pos
+            print(f"  → Hacia '{nombre}' en ({tr},{tc}), dist {dist}")
+
+            # Avanzar paso a paso
+            consumido = False
+            for _ in range(SIZE * SIZE):
+                if estado.jugador.pos == (tr, tc):
+                    break
+                if max(abs(j.r - tr), abs(j.c - tc)) <= 1 and simbolo in (OGRE, CHEST):
+                    # Llegamos al lado → si es orco, combate
+                    if simbolo == OGRE:
+                        orco = estado.orco_en(tr, tc)
+                        if orco:
+                            print(f"  ⚔ Llegaste al orco. ¡Iniciando combate!")
+                            combate(estado, orco, primer_ataque="jugador")
+                            return True
+                    break
+                movido, cb = _mover_un_paso_hacia(estado, tr, tc)
+                if cb:
+                    orco = estado.orco_en(tr, tc)
                     if orco:
-                        combate(game, orco, primer_ataque="jugador")
-            return movido
+                        combate(estado, orco, primer_ataque="jugador")
+                    return True
+                if not movido or estado.nivel_terminado:
+                    break
+                consumido = True
+            return consumido
 
+        # Por pasos
         elif "pasos" in data:
             pasos = data["pasos"]
             if not isinstance(pasos, list) or not pasos:
@@ -821,89 +767,59 @@ def ejecutar(game: Game, data: dict) -> bool:
             for i, paso in enumerate(pasos, 1):
                 if not isinstance(paso, dict):
                     continue
-
                 dir_raw  = str(paso.get("direccion", "")).lower().strip()
                 cantidad = paso.get("cantidad", 1)
-                dir_norm = DIRECCION_ALIAS.get(dir_raw, dir_raw)
 
-                if dir_norm not in DIRECCIONES_VALIDAS:
+                if dir_raw not in DIRS_8:
                     print(f"  ✗ Paso {i}: dirección inválida '{dir_raw}'")
                     continue
                 if not isinstance(cantidad, (int, float)) or int(cantidad) < 1:
                     print(f"  ✗ Paso {i}: cantidad inválida '{cantidad}'")
                     continue
 
-                print(f"  Paso {i}/{len(pasos)}: {int(cantidad)} → {dir_norm}")
-                movido, combate_iniciado = game.move_steps(dir_norm, int(cantidad))
+                print(f"  Paso {i}/{len(pasos)}: {int(cantidad)} → {dir_raw}")
+                for _ in range(int(cantidad)):
+                    nr, nc = _celda_destino(j, dir_raw)
+                    sym = estado._get((nr, nc)) if estado._dentro(nr, nc) else None
 
-                if movido:
-                    consumido = True
-                if game.nivel_terminado:
-                    return True
-
-                if combate_iniciado:
-                    # Jugador chocó contra orco → jugador atacó primero
-                    j = game.jugador
-                    DELTAS_4 = [(-1,0),(1,0),(0,-1),(0,1)]
-                    for dr, dc in DELTAS_4:
-                        orco = game.orco_en(j.r + dr, j.c + dc)
+                    # Choque con orco → combate con iniciativa del jugador
+                    if sym == OGRE:
+                        orco = estado.orco_en(nr, nc)
                         if orco:
-                            combate(game, orco, primer_ataque="jugador")
-                            break
-                    return True
+                            print(f"  ⚔ ¡Contacto con orco! Iniciando combate.")
+                            combate(estado, orco, primer_ataque="jugador")
+                            return True
 
+                    ok = ejecutar_accion(estado, j, {"tipo": "mover", "direccion": dir_raw})
+                    if ok:
+                        consumido = True
+                    if not ok or estado.nivel_terminado:
+                        break
+                if estado.nivel_terminado:
+                    return True
             return consumido
+
         else:
             print("  ✗ 'mover' sin objetivo ni pasos.")
             return False
 
-    # ── ATACAR (desde el mapa, dirección explícita) ───────
-    elif accion == "atacar":
-        dir_raw  = str(data.get("direccion", "")).lower().strip()
-        dir_norm = DIRECCION_ALIAS.get(dir_raw, dir_raw)
-        DELTAS   = {"arriba": (-1,0), "abajo": (1,0),
-                    "izquierda": (0,-1), "derecha": (0,1),
-                    "norte": (-1,0), "sur": (1,0),
-                    "oeste": (0,-1), "este": (0,1)}
-
-        if dir_norm not in DELTAS and dir_raw not in DELTAS:
-            print(f"  ✗ Dirección de ataque inválida: '{dir_raw}'")
-            print(f"     Válidas: arriba, abajo, izquierda, derecha")
-            return False
-
-        dr, dc = DELTAS.get(dir_norm) or DELTAS.get(dir_raw)
-        j = game.jugador
-        nr, nc = j.r + dr, j.c + dc
-
-        if not game._dentro(nr, nc):
-            print(f"  ✗ No hay nada que atacar fuera del tablero.")
-            return False
-
-        sym = game._get((nr, nc))
-        if sym != OGRE:
-            if sym == CHEST:
-                print(f"  ✗ No podés atacar un cofre. Usá 'abrir {dir_norm}'.")
-            elif sym == DOOR:
-                print(f"  ✗ No podés atacar la puerta. Usá 'abrir {dir_norm}'.")
-            elif sym == EMPTY:
-                print(f"  ✗ No hay nada en esa dirección ({dir_norm}).")
-            else:
-                print(f"  ✗ No hay un orco en esa dirección ({dir_norm}), hay '{sym}'.")
-            return False
-
-        orco = game.orco_en(nr, nc)
-        if orco:
-            print(f"  ⚔ Atacás al Orco {orco.idx} en ({nr},{nc}). ¡Iniciando combate con prioridad tuya!")
-            combate(game, orco, primer_ataque="jugador")
-            return True
-
-        return False
-
-    # ── ABRIR ─────────────────────────────────────────────
+    # ── ABRIR (solo cofres) ────────────────────────────────
     elif accion == "abrir":
         dir_raw  = str(data.get("direccion", "")).lower().strip()
-        dir_norm = DIRECCION_ALIAS.get(dir_raw, dir_raw)
-        return game.abrir_en(dir_norm)
+        if dir_raw not in DIRS_4:
+            print(f"  ✗ Solo se puede abrir en 4 direcciones cardinales.")
+            return False
+        if not validar(estado, j, {"tipo": "abrir", "direccion": dir_raw}):
+            nr, nc = _celda_destino(j, dir_raw)
+            sym = estado._get((nr, nc)) if estado._dentro(nr, nc) else EMPTY
+            if sym == OGRE:
+                print(f"  ✗ Eso es un orco, no un cofre. Acercate para combatir.")
+            elif sym == DOOR:
+                print(f"  ✗ La puerta no se abre: se cruza caminando con la llave.")
+            else:
+                print(f"  ✗ No hay cofre en esa dirección.")
+            return False
+        return ejecutar_accion(estado, j, {"tipo": "abrir", "direccion": dir_raw})
 
     # ── ESPERAR ───────────────────────────────────────────
     elif accion == "esperar":
@@ -914,14 +830,124 @@ def ejecutar(game: Game, data: dict) -> bool:
     elif accion == "desconocido":
         print("  ✗ No entendí. Ejemplos:")
         print("      ir 2 arriba")
-        print("      ve 3 derecha y luego 1 abajo")
-        print("      ir al orco / ir al cofre / ir a la llave")
+        print("      ve al orco / ir al cofre / ve a la puerta")
         print("      abrir derecha")
         print("      esperar")
         return False
+
     else:
-        print(f"  ✗ Acción no soportada: '{accion}'")
+        print(f"  ✗ Acción no reconocida: '{accion}'")
         return False
+
+
+# ═══════════════════════════════════════════════════════════
+#  EVALUACIÓN MÍNIMA DE INTERPRETACIÓN
+# ═══════════════════════════════════════════════════════════
+
+EVAL_CASES = [
+    # 5 movimientos simples
+    {"texto": "andá arriba", "esperado": {"accion": "mover", "pasos": [{"direccion": "arriba", "cantidad": 1}]}},
+    {"texto": "movete dos casilleros a la derecha", "esperado": {"accion": "mover", "pasos": [{"direccion": "derecha", "cantidad": 2}]}},
+    {"texto": "bajá 1", "esperado": {"accion": "mover", "pasos": [{"direccion": "abajo", "cantidad": 1}]}},
+    {"texto": "caminá tres a la izquierda", "esperado": {"accion": "mover", "pasos": [{"direccion": "izquierda", "cantidad": 3}]}},
+    {"texto": "subí en diagonal a la derecha", "esperado": {"accion": "mover", "pasos": [{"direccion": "arriba-derecha", "cantidad": 1}]}},
+
+    # 5 movimientos compuestos
+    {"texto": "andá 2 arriba y 1 derecha", "esperado": {"accion": "mover", "pasos": [{"direccion": "arriba", "cantidad": 2}, {"direccion": "derecha", "cantidad": 1}]}},
+    {"texto": "bajá 1 y después movete 2 a la izquierda", "esperado": {"accion": "mover", "pasos": [{"direccion": "abajo", "cantidad": 1}, {"direccion": "izquierda", "cantidad": 2}]}},
+    {"texto": "derecha derecha abajo", "esperado": {"accion": "mover", "pasos": [{"direccion": "derecha", "cantidad": 2}, {"direccion": "abajo", "cantidad": 1}]}},
+    {"texto": "subí 1, izquierda 1 y bajá 1", "esperado": {"accion": "mover", "pasos": [{"direccion": "arriba", "cantidad": 1}, {"direccion": "izquierda", "cantidad": 1}, {"direccion": "abajo", "cantidad": 1}]}},
+    {"texto": "avanzá 2 abajo-derecha y luego 1 arriba", "esperado": {"accion": "mover", "pasos": [{"direccion": "abajo-derecha", "cantidad": 2}, {"direccion": "arriba", "cantidad": 1}]}},
+
+    # 3 objetivos
+    {"texto": "ve al orco", "esperado": {"accion": "mover", "objetivo": "orco"}},
+    {"texto": "andá al cofre más cercano", "esperado": {"accion": "mover", "objetivo": "cofre"}},
+    {"texto": "buscá la llave", "esperado": {"accion": "mover", "objetivo": "llave"}},
+
+    # 3 interacciones
+    {"texto": "abrir derecha", "esperado": {"accion": "abrir", "direccion": "derecha"}},
+    {"texto": "abrí el cofre de la izquierda", "esperado": {"accion": "abrir", "direccion": "izquierda"}},
+    {"texto": "abrí la puerta", "esperado": {"accion": "mover", "objetivo": "puerta"}},
+
+    # 2 ambiguos
+    {"texto": "hacé eso de antes", "esperado": {"accion": "desconocido"}},
+    {"texto": "andá para allá", "esperado": {"accion": "desconocido"}},
+
+    # 2 fuera de dominio
+    {"texto": "comprá una espada en la tienda", "esperado": {"accion": "desconocido"}},
+    {"texto": "cambiá el brillo de la pantalla", "esperado": {"accion": "desconocido"}},
+]
+
+
+def _canonical_eval(data: dict) -> dict:
+    accion = str(data.get("accion", "desconocido")).lower().strip()
+    if accion == "mover" and "objetivo" in data:
+        return {"accion": "mover", "objetivo": str(data["objetivo"]).lower().strip()}
+    if accion == "mover" and "pasos" in data:
+        pasos = []
+        pasos_raw = data["pasos"] if isinstance(data["pasos"], list) else []
+        for paso in pasos_raw:
+            if not isinstance(paso, dict):
+                continue
+            try:
+                cantidad = int(paso.get("cantidad", 1))
+            except (TypeError, ValueError):
+                cantidad = 1
+            pasos.append({
+                "direccion": str(paso.get("direccion", "")).lower().strip(),
+                "cantidad": cantidad,
+            })
+        return {"accion": "mover", "pasos": pasos}
+    if accion == "abrir":
+        return {"accion": "abrir", "direccion": str(data.get("direccion", "")).lower().strip()}
+    return {"accion": accion}
+
+
+def _si_no(valor: bool) -> str:
+    return "sí" if valor else "no"
+
+
+def evaluar_interpretacion():
+    print("\nEVALUACIÓN MÍNIMA DE INTERPRETACIÓN")
+    print(f"Modelo: {OLLAMA_MODEL}")
+    print(f"Casos: {len(EVAL_CASES)}\n")
+
+    total = len(EVAL_CASES)
+    validos = 0
+    correctos = 0
+    perdidos = 0
+    latencias = []
+
+    for i, caso in enumerate(EVAL_CASES, 1):
+        texto = caso["texto"]
+        esperado = caso["esperado"]
+        print(f"{i:02d}. Input: {texto!r}")
+        data, json_valido, latencia_ms = llamar_llm_con_metricas(texto, SYSTEM_PROMPT_MAPA)
+        data = data or {"accion": "desconocido"}
+        obtenido = _canonical_eval(data)
+        accion_correcta = json_valido and obtenido == esperado
+        turno_perdido = (not json_valido) or obtenido.get("accion") == "desconocido"
+
+        validos += int(json_valido)
+        correctos += int(accion_correcta)
+        perdidos += int(turno_perdido)
+        if latencia_ms is not None:
+            latencias.append(latencia_ms)
+
+        latencia_txt = f"{latencia_ms:.0f} ms" if latencia_ms is not None else "n/a"
+        print(f"    Esperado: {esperado}")
+        print(f"    Obtenido: {obtenido}")
+        print(f"    JSON válido: {_si_no(json_valido)}")
+        print(f"    Acción correcta: {_si_no(accion_correcta)}")
+        print(f"    Latencia: {latencia_txt}")
+        print(f"    Turno perdido: {_si_no(turno_perdido)}\n")
+
+    lat_media = sum(latencias) / len(latencias) if latencias else 0.0
+    print("RESUMEN")
+    print(f"  JSON válido: {validos / total * 100:.1f}%")
+    print(f"  Acción correcta: {correctos / total * 100:.1f}%")
+    print(f"  Latencia media: {lat_media:.0f} ms")
+    print(f"  Turnos perdidos: {perdidos / total * 100:.1f}%\n")
 
 
 # ═══════════════════════════════════════════════════════════
@@ -929,41 +955,42 @@ def ejecutar(game: Game, data: dict) -> bool:
 # ═══════════════════════════════════════════════════════════
 
 AYUDA = """
-╔════════════════════════════════════════════════╗
-║      DUNGEON KNIGHT  ·  Grilla 7×7             ║
-╠════════════════════════════════════════════════╣
-║  Movimiento:                                   ║
-║    ir 2 arriba                                 ║
-║    ve 3 derecha y luego 1 abajo                ║
-║    ir al cofre / al orco / a la llave          ║
-║    ve a la puerta                              ║
-║                                                ║
-║  Interacción:                                  ║
-║    abrir derecha  →  abre cofre o puerta       ║
-║    esperar        →  pasa el turno             ║
-║                                                ║
-║  Objetivo del nivel:                           ║
-║    1. Derrotar al orco que tiene la 🗝 LLAVE   ║
-║    2. Abrir la puerta con 'abrir <dirección>'  ║
-║    3. Entrar a la puerta para ganar            ║
-║                                                ║
-║  Combate (pantalla automática):                ║
-║    atacar  /  defensa  /  huir                 ║
-║    Quien inicia el contacto ataca primero.     ║
-║                                                ║
-║  'ayuda' → este menú    'salir' → salir        ║
-╚════════════════════════════════════════════════╝
+╔══════════════════════════════════════════════════╗
+║       DUNGEON KNIGHT  ·  Grilla 7×7              ║
+╠══════════════════════════════════════════════════╣
+║  Objetivo:                                       ║
+║    1. Recogé la llave pisando su celda           ║
+║    2. Caminá hacia la puerta con la llave        ║
+║                                                  ║
+║  Movimiento:                                     ║
+║    ir 2 arriba  /  ve 3 derecha y 1 abajo        ║
+║    ir al orco  /  ve al cofre  /  ir a la llave  ║
+║                                                  ║
+║  Interacción:                                    ║
+║    abrir derecha   → abre cofre adyacente        ║
+║    esperar         → pasa el turno               ║
+║                                                  ║
+║  Combate (pantalla automática al contacto):      ║
+║    atacar  /  defensa                            ║
+║                                                  ║
+║  'ayuda' → este menú    'salir' → salir          ║
+╚══════════════════════════════════════════════════╝
 """
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] in ("--eval", "eval"):
+        verificar_modelo()
+        evaluar_interpretacion()
+        return
+
     print(AYUDA)
     verificar_modelo()
 
-    game = Game()
+    estado = Estado()
 
-    while not game.nivel_terminado:
-        game.print_board()
+    while not estado.nivel_terminado:
+        estado.print_board()
 
         try:
             texto = input("Comando: ").strip()
@@ -982,34 +1009,30 @@ def main():
 
         print(f"\n  Interpretando: «{texto}»")
         data = llamar_llm(texto, SYSTEM_PROMPT_MAPA)
-
         if data is None:
-            print("  ↩  Turno cancelado.")
+            print("  ↩ Turno cancelado.")
             continue
 
-        turno_consumido = ejecutar(game, data)
+        turno_consumido = interpretar_y_ejecutar(estado, data)
 
-        if game.nivel_terminado:
+        if estado.nivel_terminado:
             break
 
-        # ── Turno de los orcos ────────────────────────────
         if turno_consumido:
-            orco_atacante = game.turno_orcos()
-
-            # Si un orco llegó al jugador → combate con prioridad del orco
-            if orco_atacante and not game.nivel_terminado:
-                print(f"\n  ⚠  ¡Orco {orco_atacante.idx} se abalanzó sobre vos!")
-                combate(game, orco_atacante, primer_ataque="orco")
+            orco_ataca = turno_orcos(estado)
+            if orco_ataca and not estado.nivel_terminado:
+                print(f"\n  ⚠ ¡Orco {orco_ataca.idx} se abalanza sobre vos!")
+                combate(estado, orco_ataca, primer_ataque="orco")
 
         print()
 
-    # ── Pantalla final ────────────────────────────────────
-    if game.nivel_terminado:
-        game.print_board()
-        if game.victoria:
+    # Pantalla final
+    if estado.nivel_terminado:
+        estado.print_board()
+        if estado.victoria:
             print("  ★━━━━━━━━━━━━━━━━━━━━━━━━━━★")
             print("  ★    ¡NIVEL COMPLETADO!     ★")
-            print(f"  ★    Oro recogido: {game.jugador.oro}           ★")
+            print(f"  ★    Oro recogido: {estado.jugador.oro}           ★")
             print("  ★━━━━━━━━━━━━━━━━━━━━━━━━━━★\n")
         else:
             print("  ☠━━━━━━━━━━━━━━━━━━━━━━━━━━☠")
