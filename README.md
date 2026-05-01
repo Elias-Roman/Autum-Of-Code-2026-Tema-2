@@ -62,7 +62,7 @@ git clone https://github.com/Elias-Roman/Autum-Of-Code-2026-Tema-2.git
 # 2. Instalar dependencias de Python
 pip install requests
 
-# 3. Iniciar Ollama
+# 3.Iniciar Ollama
 ollama serve
 
 # 4. Configurar el modelo en Dungeon.py (línea ~14)
