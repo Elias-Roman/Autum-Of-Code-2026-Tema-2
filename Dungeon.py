@@ -704,13 +704,33 @@ def _mover_un_paso_hacia(estado: Estado, tr: int, tc: int) -> tuple[bool, bool]:
     return ok, False
 
 
-def interpretar_y_ejecutar(estado: Estado, data: dict) -> bool:
+def interpretar_y_ejecutar(estado: Estado, data: dict) -> str:
     """
     Traduce el JSON del LLM a llamadas sobre el estado.
-    Devuelve True si el turno fue consumido.
+    Devuelve:
+      "consumido"  → acción válida ejecutada (turno gastado, orcos se mueven)
+      "penalizado" → comando mal formado o mezclado (turno perdido, orcos se mueven)
+      "fisico"     → acción sensata pero bloqueada por el mundo (sin penalización)
     """
     j      = estado.jugador
     accion = data.get("accion", "").lower().strip()
+
+    # ── Detectar mezcla de acciones (mover + abrir, etc.) ─────────────────────
+    # El LLM no debería devolver campos de distintas acciones en el mismo JSON.
+    # Si "pasos" u "objetivo" coexiste con "direccion" de un abrir, es mezcla.
+    tiene_pasos   = "pasos"   in data
+    tiene_obj     = "objetivo" in data
+    tiene_dir     = "direccion" in data
+
+    if accion == "mover" and tiene_dir and not (tiene_pasos or tiene_obj):
+        # "mover" con un campo "direccion" suelto sin pasos → mal formado
+        print("  ✗ Comando mal formado: 'mover' necesita 'pasos' u 'objetivo'.")
+        return "penalizado"
+
+    if accion == "abrir" and (tiene_pasos or tiene_obj):
+        # "abrir" mezclado con campos de mover
+        print("  ✗ Comando mezclado: no se puede combinar 'abrir' con movimiento.")
+        return "penalizado"
 
     # ── MOVER ─────────────────────────────────────────────
     if accion == "mover":
@@ -721,12 +741,12 @@ def interpretar_y_ejecutar(estado: Estado, data: dict) -> bool:
             simbolo = OBJETIVO_MAP.get(nombre)
             if simbolo is None:
                 print(f"  ✗ Objetivo desconocido: '{nombre}'.")
-                return False
+                return "penalizado"
 
             target_pos, dist = estado.find_nearest(simbolo)
             if target_pos is None:
                 print(f"  ✗ No hay '{nombre}' en el tablero.")
-                return False
+                return "fisico"
 
             tr, tc = target_pos
             print(f"  → Hacia '{nombre}' en ({tr},{tc}), dist {dist}")
@@ -743,25 +763,25 @@ def interpretar_y_ejecutar(estado: Estado, data: dict) -> bool:
                         if orco:
                             print(f"  ⚔ Llegaste al orco. ¡Iniciando combate!")
                             combate(estado, orco, primer_ataque="jugador")
-                            return True
+                            return "consumido"
                     break
                 movido, cb = _mover_un_paso_hacia(estado, tr, tc)
                 if cb:
                     orco = estado.orco_en(tr, tc)
                     if orco:
                         combate(estado, orco, primer_ataque="jugador")
-                    return True
+                    return "consumido"
                 if not movido or estado.nivel_terminado:
                     break
                 consumido = True
-            return consumido
+            return "consumido" if consumido else "fisico"
 
         # Por pasos
         elif "pasos" in data:
             pasos = data["pasos"]
             if not isinstance(pasos, list) or not pasos:
                 print("  ✗ Campo 'pasos' inválido.")
-                return False
+                return "penalizado"
 
             consumido = False
             for i, paso in enumerate(pasos, 1):
@@ -788,7 +808,7 @@ def interpretar_y_ejecutar(estado: Estado, data: dict) -> bool:
                         if orco:
                             print(f"  ⚔ ¡Contacto con orco! Iniciando combate.")
                             combate(estado, orco, primer_ataque="jugador")
-                            return True
+                            return "consumido"
 
                     ok = ejecutar_accion(estado, j, {"tipo": "mover", "direccion": dir_raw})
                     if ok:
@@ -796,19 +816,19 @@ def interpretar_y_ejecutar(estado: Estado, data: dict) -> bool:
                     if not ok or estado.nivel_terminado:
                         break
                 if estado.nivel_terminado:
-                    return True
-            return consumido
+                    return "consumido"
+            return "consumido" if consumido else "fisico"
 
         else:
             print("  ✗ 'mover' sin objetivo ni pasos.")
-            return False
+            return "penalizado"
 
     # ── ABRIR (solo cofres) ────────────────────────────────
     elif accion == "abrir":
         dir_raw  = str(data.get("direccion", "")).lower().strip()
         if dir_raw not in DIRS_4:
             print(f"  ✗ Solo se puede abrir en 4 direcciones cardinales.")
-            return False
+            return "penalizado"
         if not validar(estado, j, {"tipo": "abrir", "direccion": dir_raw}):
             nr, nc = _celda_destino(j, dir_raw)
             sym = estado._get((nr, nc)) if estado._dentro(nr, nc) else EMPTY
@@ -818,13 +838,13 @@ def interpretar_y_ejecutar(estado: Estado, data: dict) -> bool:
                 print(f"  ✗ La puerta no se abre: se cruza caminando con la llave.")
             else:
                 print(f"  ✗ No hay cofre en esa dirección.")
-            return False
-        return ejecutar_accion(estado, j, {"tipo": "abrir", "direccion": dir_raw})
+            return "fisico"
+        return "consumido" if ejecutar_accion(estado, j, {"tipo": "abrir", "direccion": dir_raw}) else "fisico"
 
     # ── ESPERAR ───────────────────────────────────────────
     elif accion == "esperar":
         print("  · Turno pasado.")
-        return True
+        return "consumido"
 
     # ── DESCONOCIDO ───────────────────────────────────────
     elif accion == "desconocido":
@@ -833,11 +853,11 @@ def interpretar_y_ejecutar(estado: Estado, data: dict) -> bool:
         print("      ve al orco / ir al cofre / ve a la puerta")
         print("      abrir derecha")
         print("      esperar")
-        return False
+        return "penalizado"
 
     else:
         print(f"  ✗ Acción no reconocida: '{accion}'")
-        return False
+        return "penalizado"
 
 
 # ═══════════════════════════════════════════════════════════
@@ -1013,12 +1033,18 @@ def main():
             print("  ↩ Turno cancelado.")
             continue
 
-        turno_consumido = interpretar_y_ejecutar(estado, data)
+        resultado = interpretar_y_ejecutar(estado, data)
+        # resultado: "consumido" | "penalizado" | "fisico"
+        #   consumido  → acción válida ejecutada        → orcos se mueven
+        #   penalizado → comando mal formado / mezclado → orcos se mueven, aviso
+        #   fisico     → bloqueado por el mundo         → orcos NO se mueven
 
         if estado.nivel_terminado:
             break
 
-        if turno_consumido:
+        if resultado in ("consumido", "penalizado"):
+            if resultado == "penalizado":
+                print("  ⏳ Turno perdido. Los orcos se mueven.")
             orco_ataca = turno_orcos(estado)
             if orco_ataca and not estado.nivel_terminado:
                 print(f"\n  ⚠ ¡Orco {orco_ataca.idx} se abalanza sobre vos!")
