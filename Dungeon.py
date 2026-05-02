@@ -14,7 +14,7 @@ if hasattr(sys.stdout, "reconfigure"):
 # ═══════════════════════════════════════════════════════════
 SIZE         = 7
 OLLAMA_URL   = "http://localhost:11434/api/generate"
-OLLAMA_MODEL = "mistral"
+OLLAMA_MODEL = os.getenv('OLLAMA_MODEL') or "mistral"
 
 PLAYER = "K"
 CHEST  = "C"
