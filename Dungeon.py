@@ -16,7 +16,7 @@ if hasattr(sys.stdout, "reconfigure"):
 # ═══════════════════════════════════════════════════════════
 SIZE         = 7
 OLLAMA_URL   = "http://localhost:11434/api/generate"
-OLLAMA_MODEL = "mistral:7b"
+OLLAMA_MODEL = "mistral:latest"
 
 PLAYER = "K"
 CHEST  = "C"
@@ -852,12 +852,12 @@ def interpretar_y_ejecutar(estado: Estado, data: dict) -> bool:
             simbolo = OBJETIVO_MAP.get(nombre)
             if simbolo is None:
                 print(f"  ✗ Objetivo desconocido: '{nombre}'.")
-                return False
+                return True
 
             target_pos, dist = estado.find_nearest(simbolo)
             if target_pos is None:
                 print(f"  ✗ No hay '{nombre}' en el tablero.")
-                return False
+                return True
 
             tr, tc = target_pos
             print(f"  → Hacia '{nombre}' en ({tr},{tc}), dist {dist}")
@@ -882,8 +882,10 @@ def interpretar_y_ejecutar(estado: Estado, data: dict) -> bool:
                     if orco:
                         combate(estado, orco, primer_ataque="jugador")
                     return True
-                if not movido or estado.nivel_terminado:
+                if estado.nivel_terminado:
                     break
+                if not movido:
+                    return True
                 consumido = True
             return consumido
 
@@ -892,21 +894,22 @@ def interpretar_y_ejecutar(estado: Estado, data: dict) -> bool:
             pasos = data["pasos"]
             if not isinstance(pasos, list) or not pasos:
                 print("  ✗ Campo 'pasos' inválido.")
-                return False
+                return True
 
             consumido = False
             for i, paso in enumerate(pasos, 1):
                 if not isinstance(paso, dict):
-                    continue
+                    print(f"  ✗ Paso {i}: formato inválido.")
+                    return True
                 dir_raw  = str(paso.get("direccion", "")).lower().strip()
                 cantidad = paso.get("cantidad", 1)
 
                 if dir_raw not in DIRS_8:
                     print(f"  ✗ Paso {i}: dirección inválida '{dir_raw}'")
-                    continue
+                    return True
                 if not isinstance(cantidad, (int, float)) or int(cantidad) < 1:
                     print(f"  ✗ Paso {i}: cantidad inválida '{cantidad}'")
-                    continue
+                    return True
 
                 print(f"  Paso {i}/{len(pasos)}: {int(cantidad)} → {dir_raw}")
                 for _ in range(int(cantidad)):
@@ -925,22 +928,22 @@ def interpretar_y_ejecutar(estado: Estado, data: dict) -> bool:
                     if ok:
                         consumido = True
                     if not ok or estado.nivel_terminado:
-                        break
+                        return True
                 if estado.nivel_terminado:
                     return True
             return consumido
 
         else:
             print("  ✗ 'mover' sin objetivo ni pasos.")
-            return False
+            return True
 
     # ── ABRIR (solo cofres) ────────────────────────────────
     elif accion == "abrir":
         dir_raw  = str(data.get("direccion", "")).lower().strip()
         if dir_raw not in DIRS_4:
             print(f"  ✗ Solo se puede abrir en 4 direcciones cardinales.")
-            return False
-        if not validar(estado, j, {"tipo": "abrir", "direccion": dir_raw}):
+            return True
+        if not validar(estado, j, {"tipo": "abrir", "direccion": dir_raw})["valida"]:
             nr, nc = _celda_destino(j, dir_raw)
             sym = estado._get((nr, nc)) if estado._dentro(nr, nc) else EMPTY
             if sym == OGRE:
@@ -949,7 +952,7 @@ def interpretar_y_ejecutar(estado: Estado, data: dict) -> bool:
                 print(f"  ✗ La puerta no se abre: se cruza caminando con la llave.")
             else:
                 print(f"  ✗ No hay cofre en esa dirección.")
-            return False
+            return True
         return ejecutar(estado, j, crear_accion("abrir", direccion=dir_raw))
 
     # ── ESPERAR ───────────────────────────────────────────
@@ -964,11 +967,11 @@ def interpretar_y_ejecutar(estado: Estado, data: dict) -> bool:
         print("      ve al orco / ir al cofre / ve a la puerta")
         print("      abrir derecha")
         print("      esperar")
-        return False
+        return True
 
     else:
         print(f"  ✗ Acción no reconocida: '{accion}'")
-        return False
+        return True
 
 
 # ═══════════════════════════════════════════════════════════
@@ -1057,7 +1060,16 @@ def evaluar_interpretacion():
         data = data or {"accion": "desconocido"}
         obtenido = _canonical_eval(data)
         accion_correcta = json_valido and obtenido == esperado
-        turno_perdido = (not json_valido) or obtenido.get("accion") == "desconocido"
+        turno_perdido = (not json_valido) or (not accion_correcta)
+
+        if not json_valido:
+            motivo_perdido = "JSON inválido"
+        elif obtenido.get("accion") == "desconocido":
+            motivo_perdido = "acción desconocida"
+        elif not accion_correcta:
+            motivo_perdido = f"acción incorrecta (obtuvo {obtenido.get('accion')!r}, esperaba {esperado.get('accion')!r})"
+        else:
+            motivo_perdido = "—"
 
         validos += int(json_valido)
         correctos += int(accion_correcta)
@@ -1071,7 +1083,7 @@ def evaluar_interpretacion():
         print(f"    JSON válido: {_si_no(json_valido)}")
         print(f"    Acción correcta: {_si_no(accion_correcta)}")
         print(f"    Latencia: {latencia_txt}")
-        print(f"    Turno perdido: {_si_no(turno_perdido)}\n")
+        print(f"    Turno perdido: {_si_no(turno_perdido)}  ({motivo_perdido})\n")
 
     lat_media = sum(latencias) / len(latencias) if latencias else 0.0
     print("RESUMEN")
