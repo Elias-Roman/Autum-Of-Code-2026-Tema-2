@@ -4,7 +4,9 @@ import re
 import sys
 import time
 import os
-#
+import copy
+from dataclasses import dataclass
+
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
     sys.stderr.reconfigure(encoding="utf-8")
@@ -14,7 +16,7 @@ if hasattr(sys.stdout, "reconfigure"):
 # ═══════════════════════════════════════════════════════════
 SIZE         = 7
 OLLAMA_URL   = "http://localhost:11434/api/generate"
-OLLAMA_MODEL = os.getenv('OLLAMA_MODEL') or "mistral"
+OLLAMA_MODEL = "mistral:7b"
 
 PLAYER = "K"
 CHEST  = "C"
@@ -82,6 +84,37 @@ class Llave:
 
     @property
     def pos(self): return (self.r, self.c)
+
+
+# ═══════════════════════════════════════════════════════════
+#  ACCIONES SIMBÓLICAS
+# ═══════════════════════════════════════════════════════════
+
+@dataclass(frozen=True)
+class Accion:
+    """
+    Representación explícita de una acción simbólica.
+    El LLM produce JSON; la capa simbólica lo traduce a esta estructura.
+    """
+    tipo: str
+    direccion: str | None = None
+    cantidad: int | None = None
+    objetivo: str | None = None
+
+    def a_dict(self) -> dict:
+        data = {"tipo": self.tipo}
+        if self.direccion is not None:
+            data["direccion"] = self.direccion
+        if self.cantidad is not None:
+            data["cantidad"] = self.cantidad
+        if self.objetivo is not None:
+            data["objetivo"] = self.objetivo
+        return data
+
+
+def crear_accion(tipo: str, direccion: str | None = None,
+                 cantidad: int | None = None, objetivo: str | None = None) -> Accion:
+    return Accion(tipo=tipo, direccion=direccion, cantidad=cantidad, objetivo=objetivo)
 
 
 # ═══════════════════════════════════════════════════════════
@@ -203,96 +236,121 @@ def _celda_destino(entidad, direccion):
     return entidad.r + dr, entidad.c + dc
 
 
-def validar(estado: Estado, entidad, accion: dict) -> bool:
+def _normalizar_accion(accion) -> dict:
+    if isinstance(accion, Accion):
+        return accion.a_dict()
+    if isinstance(accion, dict):
+        return dict(accion)
+    raise TypeError(f"Acción no soportada: {type(accion)!r}")
+
+
+def _resolver_entidad_en_copia(estado_copia: Estado, entidad_original):
+    if isinstance(entidad_original, Jugador):
+        return estado_copia.jugador
+    if isinstance(entidad_original, Orco):
+        return next((o for o in estado_copia.orcos if o.idx == entidad_original.idx), None)
+    return None
+
+
+def _copiar_estado(origen: Estado, destino: Estado):
+    destino.board = copy.deepcopy(origen.board)
+    destino.under_player = origen.under_player
+    destino.jugador = copy.deepcopy(origen.jugador)
+    destino.orcos = copy.deepcopy(origen.orcos)
+    destino.cofres = copy.deepcopy(origen.cofres)
+    destino.puerta = copy.deepcopy(origen.puerta)
+    destino.llave = copy.deepcopy(origen.llave)
+    destino.nivel_terminado = origen.nivel_terminado
+    destino.victoria = origen.victoria
+
+
+def validar(estado: Estado, entidad, accion) -> dict:
     """
-    Devuelve True si la acción es realizable en el estado actual.
-    NO modifica el estado.
+    Decide si una acción es legal en el estado actual.
+    NO modifica nada.
+    Devuelve un dict rico para trazabilidad y debug.
     """
-    tipo = accion.get("tipo")
+    a = _normalizar_accion(accion)
+    tipo = a.get("tipo")
+
+    info = {"valida": False, "motivo": "accion_desconocida", "tipo": tipo}
 
     if tipo == "esperar":
-        return True
+        info.update(valida=True, motivo="ok")
+        return info
 
     if tipo == "mover":
-        d = accion.get("direccion")
+        d = a.get("direccion")
         if d not in DIRS_8:
-            return False
+            info["motivo"] = "direccion_invalida"
+            return info
         nr, nc = _celda_destino(entidad, d)
         if not estado._dentro(nr, nc):
-            return False
+            info["motivo"] = "fuera_de_tablero"
+            return info
         sym = estado._get((nr, nc))
-        # Puerta y llave no bloquean: se activan al pisarlas.
         if isinstance(entidad, Jugador):
-            return sym in (EMPTY, DOOR, KEY)
-        else:  # Orco: solo EMPTY
-            return sym == EMPTY
+            if sym in (EMPTY, DOOR, KEY):
+                info.update(valida=True, motivo="ok", nueva_pos=(nr, nc), celda_destino=sym)
+            else:
+                info.update(motivo="celda_ocupada", nueva_pos=(nr, nc), celda_destino=sym)
+        else:
+            if sym == EMPTY:
+                info.update(valida=True, motivo="ok", nueva_pos=(nr, nc), celda_destino=sym)
+            else:
+                info.update(motivo="celda_ocupada", nueva_pos=(nr, nc), celda_destino=sym)
+        return info
 
     if tipo == "atacar":
-        d = accion.get("direccion")
+        d = a.get("direccion")
         if d not in DIRS_8:
-            return False
+            info["motivo"] = "direccion_invalida"
+            return info
         nr, nc = _celda_destino(entidad, d)
         if not estado._dentro(nr, nc):
-            return False
+            info["motivo"] = "fuera_de_tablero"
+            return info
         sym = estado._get((nr, nc))
-        return sym == (OGRE if isinstance(entidad, Jugador) else PLAYER)
+        objetivo_valido = OGRE if isinstance(entidad, Jugador) else PLAYER
+        if sym == objetivo_valido:
+            info.update(valida=True, motivo="ok", objetivo_pos=(nr, nc), celda_destino=sym)
+        else:
+            info.update(motivo="sin_objetivo_valido", objetivo_pos=(nr, nc), celda_destino=sym)
+        return info
 
     if tipo == "abrir":
-        d = accion.get("direccion")
+        d = a.get("direccion")
         if d not in DIRS_4:
-            return False
+            info["motivo"] = "direccion_invalida"
+            return info
         nr, nc = _celda_destino(entidad, d)
         if not estado._dentro(nr, nc):
-            return False
+            info["motivo"] = "fuera_de_tablero"
+            return info
         sym = estado._get((nr, nc))
-        return sym == CHEST   # solo cofres; la puerta se maneja al pisar
+        if sym == CHEST:
+            info.update(valida=True, motivo="ok", objetivo_pos=(nr, nc), celda_destino=sym)
+        else:
+            info.update(motivo="no_hay_cofre", objetivo_pos=(nr, nc), celda_destino=sym)
+        return info
 
     if tipo == "defensa":
-        return isinstance(entidad, Jugador)
+        if isinstance(entidad, Jugador):
+            info.update(valida=True, motivo="ok")
+        else:
+            info["motivo"] = "solo_jugador"
+        return info
 
-    return False
+    return info
 
 
-def probar(estado: Estado, entidad, accion: dict) -> dict:
+def _aplicar_accion_en_estado(estado: Estado, entidad, accion, *, silencioso: bool = False) -> bool:
     """
-    Devuelve un resumen del estado hipotético si se ejecutara la acción.
-    NO modifica el estado real.
+    Aplica efectos sobre EL estado recibido, asumiendo que la acción ya fue validada.
+    Sirve tanto para simular (probar) como para ejecutar.
     """
-    if not validar(estado, entidad, accion):
-        return {"valida": False}
-
-    tipo = accion.get("tipo")
-    resultado = {"valida": True, "tipo": tipo}
-
-    if tipo == "mover":
-        nr, nc = _celda_destino(entidad, accion["direccion"])
-        resultado["nueva_pos"] = (nr, nc)
-        resultado["celda_destino"] = estado._get((nr, nc))
-
-    if tipo == "atacar":
-        nr, nc = _celda_destino(entidad, accion["direccion"])
-        objetivo = estado.orco_en(nr, nc) if isinstance(entidad, Jugador) else None
-        if objetivo:
-            resultado["objetivo_hp_post"] = max(objetivo.hp - 1.0, 0)
-            resultado["objetivo_muere"]   = objetivo.hp <= 1.0
-
-    return resultado
-
-
-# ═══════════════════════════════════════════════════════════
-#  EJECUCIÓN SIMBÓLICA  (spec §4.4)
-# ═══════════════════════════════════════════════════════════
-
-def ejecutar_accion(estado: Estado, entidad, accion: dict) -> bool:
-    """
-    Ejecuta la acción sobre el estado.
-    Acciones inválidas → se convierten en 'esperar' (spec: no falla, devuelve False).
-    Devuelve True si se ejecutó la acción pedida, False si se convirtió en esperar.
-    """
-    if not validar(estado, entidad, accion):
-        return False   # → esperar implícito
-
-    tipo = accion.get("tipo")
+    a = _normalizar_accion(accion)
+    tipo = a.get("tipo")
 
     if tipo == "esperar":
         return True
@@ -302,25 +360,29 @@ def ejecutar_accion(estado: Estado, entidad, accion: dict) -> bool:
         return True
 
     if tipo == "mover":
-        d = accion["direccion"]
+        d = a["direccion"]
         nr, nc = _celda_destino(entidad, d)
         sym = estado._get((nr, nc))
 
-        # ── Movimiento normal
         estado._set(entidad.pos, estado.under_player if isinstance(entidad, Jugador) else EMPTY)
         entidad.r, entidad.c = nr, nc
+
         if isinstance(entidad, Jugador):
             if sym == KEY:
                 estado.jugador.tiene_llave = True
                 if estado.llave:
                     estado.llave.recogida = True
                 estado.under_player = EMPTY
-                print("  🗝 Recogiste la llave.")
+                if not silencioso:
+                    print("  🗝 Recogiste la llave.")
             else:
                 estado.under_player = sym
+
             estado._set(entidad.pos, PLAYER)
+
             if sym == DOOR and estado.jugador.tiene_llave:
-                print(f"  ★ ¡Has cruzado la puerta con la llave! Nivel completado.")
+                if not silencioso:
+                    print("  ★ ¡Has cruzado la puerta con la llave! Nivel completado.")
                 estado.nivel_terminado = True
                 estado.victoria = True
         else:
@@ -328,7 +390,7 @@ def ejecutar_accion(estado: Estado, entidad, accion: dict) -> bool:
         return True
 
     if tipo == "atacar":
-        d = accion["direccion"]
+        d = a["direccion"]
         nr, nc = _celda_destino(entidad, d)
 
         if isinstance(entidad, Jugador):
@@ -336,32 +398,101 @@ def ejecutar_accion(estado: Estado, entidad, accion: dict) -> bool:
             if orco:
                 orco.hp = max(round(orco.hp - 1.0, 1), 0.0)
                 if not orco.vivo:
-                    print(f"  ⚔  Orco {orco.idx} derrotado.")
                     estado.board[nr][nc] = EMPTY
+                    if not silencioso:
+                        print(f"  ⚔  Orco {orco.idx} derrotado.")
                 else:
-                    print(f"  ⚔  Golpe al Orco {orco.idx}. HP: {orco.hp:.1f}")
+                    if not silencioso:
+                        print(f"  ⚔  Golpe al Orco {orco.idx}. HP: {orco.hp:.1f}")
         else:
-            # Orco ataca jugador
-            j   = estado.jugador
+            j = estado.jugador
             dmg = 0.5 if j.defendiendo else 1.0
             j.hp = max(round(j.hp - dmg, 1), 0.0)
-            print(f"  ⚔  Orco {entidad.idx} ataca. Daño: {dmg}  HP: {j.hp:.1f}/3.0")
+            if not silencioso:
+                print(f"  ⚔  Orco {entidad.idx} ataca. Daño: {dmg}  HP: {j.hp:.1f}/3.0")
             if not j.vivo:
                 estado.nivel_terminado = True
                 estado.victoria = False
         return True
 
     if tipo == "abrir":
-        d = accion["direccion"]
+        d = a["direccion"]
         nr, nc = _celda_destino(entidad, d)
         cofre = estado.cofre_en(nr, nc)
         if cofre:
             cofre.abierto = True
             estado.board[nr][nc] = EMPTY
             estado.jugador.oro += 1
-            print(f"  📦 ¡Cofre abierto! Oro: {estado.jugador.oro}")
+            if not silencioso:
+                print(f"  📦 ¡Cofre abierto! Oro: {estado.jugador.oro}")
         return True
 
+    return False
+
+
+def probar(estado: Estado, entidad, accion):
+    """
+    Devuelve un Estado hipotético resultante de aplicar la acción.
+    NO toca el estado real. Si la acción es inválida, devuelve None.
+    """
+    info = validar(estado, entidad, accion)
+    if not info["valida"]:
+        return None
+
+    estado_copia = copy.deepcopy(estado)
+    entidad_copia = _resolver_entidad_en_copia(estado_copia, entidad)
+    if entidad_copia is None:
+        return None
+
+    _aplicar_accion_en_estado(estado_copia, entidad_copia, accion, silencioso=True)
+    return estado_copia
+
+
+def _emitir_eventos_transicion(antes: Estado, despues: Estado, entidad_original, accion):
+    a = _normalizar_accion(accion)
+    tipo = a.get("tipo")
+
+    if tipo == "mover" and isinstance(entidad_original, Jugador):
+        if not antes.jugador.tiene_llave and despues.jugador.tiene_llave:
+            print("  🗝 Recogiste la llave.")
+        if not antes.nivel_terminado and despues.nivel_terminado and despues.victoria:
+            print("  ★ ¡Has cruzado la puerta con la llave! Nivel completado.")
+        return
+
+    if tipo == "atacar":
+        if isinstance(entidad_original, Jugador):
+            nr, nc = _celda_destino(antes.jugador, a["direccion"])
+            orco_antes = antes.orco_en(nr, nc)
+            orco_despues = despues.orco_en(nr, nc)
+            if orco_antes and orco_despues is None:
+                print(f"  ⚔  Orco {orco_antes.idx} derrotado.")
+            elif orco_antes and orco_despues:
+                print(f"  ⚔  Golpe al Orco {orco_despues.idx}. HP: {orco_despues.hp:.1f}")
+        else:
+            dmg = round(antes.jugador.hp - despues.jugador.hp, 1)
+            print(f"  ⚔  Orco {entidad_original.idx} ataca. Daño: {dmg}  HP: {despues.jugador.hp:.1f}/3.0")
+        return
+
+    if tipo == "abrir" and despues.jugador.oro > antes.jugador.oro:
+        print(f"  📦 ¡Cofre abierto! Oro: {despues.jugador.oro}")
+
+
+def ejecutar(estado: Estado, entidad, accion) -> bool:
+    """
+    Operación simbólica principal: valida, prueba y aplica.
+    Si es inválida, no modifica el estado y devuelve False.
+    """
+    info = validar(estado, entidad, accion)
+    if not info["valida"]:
+        return False
+
+    estado_antes = copy.deepcopy(estado)
+    estado_probado = probar(estado, entidad, accion)
+    if estado_probado is None:
+        return False
+
+    _emitir_eventos_transicion(estado_antes, estado_probado, entidad, accion)
+    _copiar_estado(estado_probado, estado)
     return True
 
 
@@ -372,12 +503,11 @@ def ejecutar_accion(estado: Estado, entidad, accion: dict) -> bool:
 def turno_orcos(estado: Estado):
     """
     Cada orco hace UNA acción (spec):
-      - Si ya adyacente (4 dirs) → marca para combate (no aplica daño aquí).
-      - Si no → se mueve un paso hacia el jugador (4 dirs).
-        Aunque quede adyacente tras moverse, NO ataca ese mismo turno.
-    Devuelve el orco que iniciará combate, o None.
+      - Si ya está adyacente (4 dirs) → marca para combate.
+      - Si no → intenta moverse un paso hacia el jugador usando la misma capa simbólica.
     """
     DELTAS_4 = [(-1,0),(1,0),(0,-1),(0,1)]
+    DIR_POR_DELTA = {(-1,0): "arriba", (1,0): "abajo", (0,-1): "izquierda", (0,1): "derecha"}
     j = estado.jugador
     orco_atacante = None
 
@@ -390,22 +520,23 @@ def turno_orcos(estado: Estado):
 
         if ya_adj:
             if orco_atacante is None:
-                orco_atacante = orco   # solo el primero inicia combate
-        else:
-            # Moverse hacia el jugador
-            mejor, mejor_dist = None, abs(orco.r - jr) + abs(orco.c - jc)
-            for dr, dc in DELTAS_4:
-                nr, nc = orco.r + dr, orco.c + dc
-                if not estado._dentro(nr, nc) or estado.board[nr][nc] != EMPTY:
-                    continue
-                dist = abs(nr - jr) + abs(nc - jc)
-                if dist < mejor_dist:
-                    mejor_dist, mejor = dist, (dr, dc)
-            if mejor:
-                estado.board[orco.r][orco.c] = EMPTY
-                orco.r += mejor[0]
-                orco.c += mejor[1]
-                estado.board[orco.r][orco.c] = OGRE
+                orco_atacante = orco
+            continue
+
+        mejor_delta = None
+        mejor_dist = abs(orco.r - jr) + abs(orco.c - jc)
+        for dr, dc in DELTAS_4:
+            nr, nc = orco.r + dr, orco.c + dc
+            if not estado._dentro(nr, nc):
+                continue
+            dist = abs(nr - jr) + abs(nc - jc)
+            accion = crear_accion("mover", direccion=DIR_POR_DELTA[(dr, dc)])
+            if validar(estado, orco, accion)["valida"] and dist < mejor_dist:
+                mejor_dist = dist
+                mejor_delta = (dr, dc)
+
+        if mejor_delta:
+            ejecutar(estado, orco, crear_accion("mover", direccion=DIR_POR_DELTA[mejor_delta]))
 
     j.defendiendo = False
     return orco_atacante
@@ -700,37 +831,17 @@ def _mover_un_paso_hacia(estado: Estado, tr: int, tc: int) -> tuple[bool, bool]:
     if sym == OGRE:
         return True, True
 
-    ok = ejecutar_accion(estado, j, {"tipo": "mover", "direccion": dir_str})
+    ok = ejecutar(estado, j, crear_accion("mover", direccion=dir_str))
     return ok, False
 
 
-def interpretar_y_ejecutar(estado: Estado, data: dict) -> str:
+def interpretar_y_ejecutar(estado: Estado, data: dict) -> bool:
     """
     Traduce el JSON del LLM a llamadas sobre el estado.
-    Devuelve:
-      "consumido"  → acción válida ejecutada (turno gastado, orcos se mueven)
-      "penalizado" → comando mal formado o mezclado (turno perdido, orcos se mueven)
-      "fisico"     → acción sensata pero bloqueada por el mundo (sin penalización)
+    Devuelve True si el turno fue consumido.
     """
     j      = estado.jugador
     accion = data.get("accion", "").lower().strip()
-
-    # ── Detectar mezcla de acciones (mover + abrir, etc.) ─────────────────────
-    # El LLM no debería devolver campos de distintas acciones en el mismo JSON.
-    # Si "pasos" u "objetivo" coexiste con "direccion" de un abrir, es mezcla.
-    tiene_pasos   = "pasos"   in data
-    tiene_obj     = "objetivo" in data
-    tiene_dir     = "direccion" in data
-
-    if accion == "mover" and tiene_dir and not (tiene_pasos or tiene_obj):
-        # "mover" con un campo "direccion" suelto sin pasos → mal formado
-        print("  ✗ Comando mal formado: 'mover' necesita 'pasos' u 'objetivo'.")
-        return "penalizado"
-
-    if accion == "abrir" and (tiene_pasos or tiene_obj):
-        # "abrir" mezclado con campos de mover
-        print("  ✗ Comando mezclado: no se puede combinar 'abrir' con movimiento.")
-        return "penalizado"
 
     # ── MOVER ─────────────────────────────────────────────
     if accion == "mover":
@@ -741,12 +852,12 @@ def interpretar_y_ejecutar(estado: Estado, data: dict) -> str:
             simbolo = OBJETIVO_MAP.get(nombre)
             if simbolo is None:
                 print(f"  ✗ Objetivo desconocido: '{nombre}'.")
-                return "penalizado"
+                return False
 
             target_pos, dist = estado.find_nearest(simbolo)
             if target_pos is None:
                 print(f"  ✗ No hay '{nombre}' en el tablero.")
-                return "fisico"
+                return False
 
             tr, tc = target_pos
             print(f"  → Hacia '{nombre}' en ({tr},{tc}), dist {dist}")
@@ -763,25 +874,25 @@ def interpretar_y_ejecutar(estado: Estado, data: dict) -> str:
                         if orco:
                             print(f"  ⚔ Llegaste al orco. ¡Iniciando combate!")
                             combate(estado, orco, primer_ataque="jugador")
-                            return "consumido"
+                            return True
                     break
                 movido, cb = _mover_un_paso_hacia(estado, tr, tc)
                 if cb:
                     orco = estado.orco_en(tr, tc)
                     if orco:
                         combate(estado, orco, primer_ataque="jugador")
-                    return "consumido"
+                    return True
                 if not movido or estado.nivel_terminado:
                     break
                 consumido = True
-            return "consumido" if consumido else "fisico"
+            return consumido
 
         # Por pasos
         elif "pasos" in data:
             pasos = data["pasos"]
             if not isinstance(pasos, list) or not pasos:
                 print("  ✗ Campo 'pasos' inválido.")
-                return "penalizado"
+                return False
 
             consumido = False
             for i, paso in enumerate(pasos, 1):
@@ -808,27 +919,27 @@ def interpretar_y_ejecutar(estado: Estado, data: dict) -> str:
                         if orco:
                             print(f"  ⚔ ¡Contacto con orco! Iniciando combate.")
                             combate(estado, orco, primer_ataque="jugador")
-                            return "consumido"
+                            return True
 
-                    ok = ejecutar_accion(estado, j, {"tipo": "mover", "direccion": dir_raw})
+                    ok = ejecutar(estado, j, crear_accion("mover", direccion=dir_raw))
                     if ok:
                         consumido = True
                     if not ok or estado.nivel_terminado:
                         break
                 if estado.nivel_terminado:
-                    return "consumido"
-            return "consumido" if consumido else "fisico"
+                    return True
+            return consumido
 
         else:
             print("  ✗ 'mover' sin objetivo ni pasos.")
-            return "penalizado"
+            return False
 
     # ── ABRIR (solo cofres) ────────────────────────────────
     elif accion == "abrir":
         dir_raw  = str(data.get("direccion", "")).lower().strip()
         if dir_raw not in DIRS_4:
             print(f"  ✗ Solo se puede abrir en 4 direcciones cardinales.")
-            return "penalizado"
+            return False
         if not validar(estado, j, {"tipo": "abrir", "direccion": dir_raw}):
             nr, nc = _celda_destino(j, dir_raw)
             sym = estado._get((nr, nc)) if estado._dentro(nr, nc) else EMPTY
@@ -838,13 +949,13 @@ def interpretar_y_ejecutar(estado: Estado, data: dict) -> str:
                 print(f"  ✗ La puerta no se abre: se cruza caminando con la llave.")
             else:
                 print(f"  ✗ No hay cofre en esa dirección.")
-            return "fisico"
-        return "consumido" if ejecutar_accion(estado, j, {"tipo": "abrir", "direccion": dir_raw}) else "fisico"
+            return False
+        return ejecutar(estado, j, crear_accion("abrir", direccion=dir_raw))
 
     # ── ESPERAR ───────────────────────────────────────────
     elif accion == "esperar":
         print("  · Turno pasado.")
-        return "consumido"
+        return True
 
     # ── DESCONOCIDO ───────────────────────────────────────
     elif accion == "desconocido":
@@ -853,11 +964,11 @@ def interpretar_y_ejecutar(estado: Estado, data: dict) -> str:
         print("      ve al orco / ir al cofre / ve a la puerta")
         print("      abrir derecha")
         print("      esperar")
-        return "penalizado"
+        return False
 
     else:
         print(f"  ✗ Acción no reconocida: '{accion}'")
-        return "penalizado"
+        return False
 
 
 # ═══════════════════════════════════════════════════════════
@@ -1033,18 +1144,12 @@ def main():
             print("  ↩ Turno cancelado.")
             continue
 
-        resultado = interpretar_y_ejecutar(estado, data)
-        # resultado: "consumido" | "penalizado" | "fisico"
-        #   consumido  → acción válida ejecutada        → orcos se mueven
-        #   penalizado → comando mal formado / mezclado → orcos se mueven, aviso
-        #   fisico     → bloqueado por el mundo         → orcos NO se mueven
+        turno_consumido = interpretar_y_ejecutar(estado, data)
 
         if estado.nivel_terminado:
             break
 
-        if resultado in ("consumido", "penalizado"):
-            if resultado == "penalizado":
-                print("  ⏳ Turno perdido. Los orcos se mueven.")
+        if turno_consumido:
             orco_ataca = turno_orcos(estado)
             if orco_ataca and not estado.nivel_terminado:
                 print(f"\n  ⚠ ¡Orco {orco_ataca.idx} se abalanza sobre vos!")
