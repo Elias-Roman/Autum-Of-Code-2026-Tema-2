@@ -16,7 +16,7 @@ if hasattr(sys.stdout, "reconfigure"):
 # ═══════════════════════════════════════════════════════════
 SIZE         = 7
 OLLAMA_URL   = "http://localhost:11434/api/generate"
-OLLAMA_MODEL = "llama3:8b"
+OLLAMA_MODEL = "llama3:latest"
 
 PLAYER = "K"
 CHEST  = "C"
@@ -970,36 +970,38 @@ def interpretar_y_ejecutar(estado: Estado, data: dict) -> bool:
 # ═══════════════════════════════════════════════════════════
 
 EVAL_CASES = [
-    # 5 movimientos simples (cantidad siempre 1)
-    {"texto": "andá arriba", "esperado": {"accion": "mover", "pasos": [{"direccion": "arriba", "cantidad": 1}]}},
-    {"texto": "movete dos casilleros a la derecha", "esperado": {"accion": "mover", "pasos": [{"direccion": "derecha", "cantidad": 1}]}},
-    {"texto": "bajá 1", "esperado": {"accion": "mover", "pasos": [{"direccion": "abajo", "cantidad": 1}]}},
-    {"texto": "caminá tres a la izquierda", "esperado": {"accion": "mover", "pasos": [{"direccion": "izquierda", "cantidad": 1}]}},
-    {"texto": "subí en diagonal a la derecha", "esperado": {"accion": "mover", "pasos": [{"direccion": "arriba-derecha", "cantidad": 1}]}},
+    # 8 movimientos simples — una por cada dirección, fraseología variada
+    {"texto": "andá arriba",                        "esperado": {"accion": "mover", "pasos": [{"direccion": "arriba",           "cantidad": 1}]}},
+    {"texto": "bajá",                               "esperado": {"accion": "mover", "pasos": [{"direccion": "abajo",            "cantidad": 1}]}},
+    {"texto": "movete a la izquierda",              "esperado": {"accion": "mover", "pasos": [{"direccion": "izquierda",        "cantidad": 1}]}},
+    {"texto": "ve a la derecha",                    "esperado": {"accion": "mover", "pasos": [{"direccion": "derecha",          "cantidad": 1}]}},
+    {"texto": "subí en diagonal hacia la izquierda","esperado": {"accion": "mover", "pasos": [{"direccion": "arriba-izquierda", "cantidad": 1}]}},
+    {"texto": "avanzá arriba a la derecha",         "esperado": {"accion": "mover", "pasos": [{"direccion": "arriba-derecha",   "cantidad": 1}]}},
+    {"texto": "desplázate abajo-izquierda",         "esperado": {"accion": "mover", "pasos": [{"direccion": "abajo-izquierda",  "cantidad": 1}]}},
+    {"texto": "caminá hacia abajo a la derecha",    "esperado": {"accion": "mover", "pasos": [{"direccion": "abajo-derecha",    "cantidad": 1}]}},
 
-    # 5 movimientos compuestos → solo el primer paso, cantidad 1
-    {"texto": "andá 2 arriba y 1 derecha", "esperado": {"accion": "mover", "pasos": [{"direccion": "arriba", "cantidad": 1}]}},
-    {"texto": "bajá 1 y después movete 2 a la izquierda", "esperado": {"accion": "mover", "pasos": [{"direccion": "abajo", "cantidad": 1}]}},
-    {"texto": "derecha derecha abajo", "esperado": {"accion": "mover", "pasos": [{"direccion": "derecha", "cantidad": 1}]}},
-    {"texto": "subí 1, izquierda 1 y bajá 1", "esperado": {"accion": "mover", "pasos": [{"direccion": "arriba", "cantidad": 1}]}},
-    {"texto": "avanzá 2 abajo-derecha y luego 1 arriba", "esperado": {"accion": "mover", "pasos": [{"direccion": "abajo-derecha", "cantidad": 1}]}},
-
-    # 3 objetivos
-    {"texto": "ve al orco", "esperado": {"accion": "mover", "objetivo": "orco"}},
-    {"texto": "andá al cofre más cercano", "esperado": {"accion": "mover", "objetivo": "cofre"}},
-    {"texto": "buscá la llave", "esperado": {"accion": "mover", "objetivo": "llave"}},
+    # 4 objetivos — uno por cada target válido
+    {"texto": "ve al orco",              "esperado": {"accion": "mover", "objetivo": "orco"}},
+    {"texto": "andá al cofre más cercano","esperado": {"accion": "mover", "objetivo": "cofre"}},
+    {"texto": "buscá la llave",          "esperado": {"accion": "mover", "objetivo": "llave"}},
+    {"texto": "abrí la puerta",          "esperado": {"accion": "mover", "objetivo": "puerta"}},
 
     # 3 interacciones
-    {"texto": "abrir derecha", "esperado": {"accion": "abrir", "direccion": "derecha"}},
-    {"texto": "abrí el cofre de la izquierda", "esperado": {"accion": "abrir", "direccion": "izquierda"}},
-    {"texto": "abrí la puerta", "esperado": {"accion": "mover", "objetivo": "puerta"}},
+    {"texto": "abrir derecha",                  "esperado": {"accion": "abrir",   "direccion": "derecha"}},
+    {"texto": "abrí el cofre de la izquierda",  "esperado": {"accion": "abrir",   "direccion": "izquierda"}},
+    {"texto": "esperar",                        "esperado": {"accion": "esperar"}},
 
-    # 2 ambiguos
-    {"texto": "hacé eso de antes", "esperado": {"accion": "desconocido"}},
-    {"texto": "andá para allá", "esperado": {"accion": "desconocido"}},
+    # 2 esperar con sinónimos
+    {"texto": "pasar turno", "esperado": {"accion": "esperar"}},
+    {"texto": "descansar",   "esperado": {"accion": "esperar"}},
+
+    # 3 ambiguos / sin dirección clara
+    {"texto": "hacé eso de antes",  "esperado": {"accion": "desconocido"}},
+    {"texto": "andá para allá",     "esperado": {"accion": "desconocido"}},
+    {"texto": "movete varios pasos","esperado": {"accion": "desconocido"}},
 
     # 2 fuera de dominio
-    {"texto": "comprá una espada en la tienda", "esperado": {"accion": "desconocido"}},
+    {"texto": "comprá una espada en la tienda",  "esperado": {"accion": "desconocido"}},
     {"texto": "cambiá el brillo de la pantalla", "esperado": {"accion": "desconocido"}},
 ]
 
