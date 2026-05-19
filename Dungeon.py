@@ -16,7 +16,7 @@ if hasattr(sys.stdout, "reconfigure"):
 # ═══════════════════════════════════════════════════════════
 SIZE         = 7
 OLLAMA_URL   = "http://localhost:11434/api/generate"
-OLLAMA_MODEL = "mistral:latest"
+OLLAMA_MODEL = "llama3:8b"
 
 PLAYER = "K"
 CHEST  = "C"
@@ -594,8 +594,8 @@ Sin texto extra, sin backticks, sin markdown.
 
 ESQUEMAS:
 
-1) Movimiento por pasos:
-{"accion":"mover","pasos":[{"direccion":"arriba","cantidad":2},{"direccion":"derecha","cantidad":3}]}
+1) Movimiento (siempre 1 sola celda, 1 solo paso):
+{"accion":"mover","pasos":[{"direccion":"arriba","cantidad":1}]}
 
 2) Moverse hacia el objeto más cercano:
 {"accion":"mover","objetivo":"cofre"}
@@ -613,7 +613,9 @@ REGLAS:
 - esperar/pasar/descansar → "esperar"
 - Direcciones válidas: arriba, abajo, izquierda, derecha, arriba-izquierda, arriba-derecha, abajo-izquierda, abajo-derecha
 - Objetivos válidos: cofre, orco, puerta, llave
-- Si hay objeto destino → formato 2. Si hay número/pasos → formato 1.
+- Si hay objeto destino → formato 2. Si hay dirección → formato 1.
+- IMPORTANTE: el movimiento es SIEMPRE de 1 sola celda. "cantidad" siempre vale 1.
+- Si el jugador pide moverse múltiples pasos o en múltiples direcciones, interpretá solo el PRIMER paso con cantidad 1.
 - Si no entendés: {"accion":"desconocido"}
 - Solo JSON."""
 
@@ -862,76 +864,65 @@ def interpretar_y_ejecutar(estado: Estado, data: dict) -> bool:
             tr, tc = target_pos
             print(f"  → Hacia '{nombre}' en ({tr},{tc}), dist {dist}")
 
-            # Avanzar paso a paso
-            consumido = False
-            for _ in range(SIZE * SIZE):
-                if estado.jugador.pos == (tr, tc):
-                    break
-                if max(abs(j.r - tr), abs(j.c - tc)) <= 1 and simbolo in (OGRE, CHEST):
-                    # Llegamos al lado → si es orco, combate
-                    if simbolo == OGRE:
-                        orco = estado.orco_en(tr, tc)
-                        if orco:
-                            print(f"  ⚔ Llegaste al orco. ¡Iniciando combate!")
-                            combate(estado, orco, primer_ataque="jugador")
-                            return True
-                    break
-                movido, cb = _mover_un_paso_hacia(estado, tr, tc)
-                if cb:
+            # 1 solo paso hacia el objetivo por turno (spec 4.3)
+            if estado.jugador.pos == (tr, tc):
+                print(f"  · Ya estás en '{nombre}'.")
+                return True
+
+            if max(abs(j.r - tr), abs(j.c - tc)) <= 1 and simbolo in (OGRE, CHEST):
+                if simbolo == OGRE:
                     orco = estado.orco_en(tr, tc)
                     if orco:
+                        print(f"  ⚔ Llegaste al orco. ¡Iniciando combate!")
                         combate(estado, orco, primer_ataque="jugador")
-                    return True
-                if estado.nivel_terminado:
-                    break
-                if not movido:
-                    return True
-                consumido = True
-            return consumido
+                        return True
+                return True
 
-        # Por pasos
+            movido, cb = _mover_un_paso_hacia(estado, tr, tc)
+            if cb:
+                orco = estado.orco_en(tr, tc)
+                if orco:
+                    combate(estado, orco, primer_ataque="jugador")
+            return True
+
+        # Por pasos -- 1 sola celda por turno (spec 4.3: accion = celda contigua)
         elif "pasos" in data:
             pasos = data["pasos"]
             if not isinstance(pasos, list) or not pasos:
                 print("  ✗ Campo 'pasos' inválido.")
                 return True
 
-            consumido = False
-            for i, paso in enumerate(pasos, 1):
-                if not isinstance(paso, dict):
-                    print(f"  ✗ Paso {i}: formato inválido.")
-                    return True
-                dir_raw  = str(paso.get("direccion", "")).lower().strip()
-                cantidad = paso.get("cantidad", 1)
+            # Solo se ejecuta el primer paso con cantidad forzada a 1
+            paso = pasos[0]
+            if not isinstance(paso, dict):
+                print("  ✗ Paso 1: formato inválido.")
+                return True
 
-                if dir_raw not in DIRS_8:
-                    print(f"  ✗ Paso {i}: dirección inválida '{dir_raw}'")
-                    return True
-                if not isinstance(cantidad, (int, float)) or int(cantidad) < 1:
-                    print(f"  ✗ Paso {i}: cantidad inválida '{cantidad}'")
+            dir_raw  = str(paso.get("direccion", "")).lower().strip()
+            cantidad = paso.get("cantidad", 1)
+
+            if dir_raw not in DIRS_8:
+                print(f"  ✗ Dirección inválida '{dir_raw}'")
+                return True
+            if not isinstance(cantidad, (int, float)) or int(cantidad) < 1:
+                print(f"  ✗ Cantidad inválida '{cantidad}'")
+                return True
+
+            if len(pasos) > 1 or int(cantidad) > 1:
+                print(f"  ℹ Solo se mueve 1 celda por turno → {dir_raw}")
+
+            nr, nc = _celda_destino(j, dir_raw)
+            sym = estado._get((nr, nc)) if estado._dentro(nr, nc) else None
+
+            if sym == OGRE:
+                orco = estado.orco_en(nr, nc)
+                if orco:
+                    print(f"  ⚔ ¡Contacto con orco! Iniciando combate.")
+                    combate(estado, orco, primer_ataque="jugador")
                     return True
 
-                print(f"  Paso {i}/{len(pasos)}: {int(cantidad)} → {dir_raw}")
-                for _ in range(int(cantidad)):
-                    nr, nc = _celda_destino(j, dir_raw)
-                    sym = estado._get((nr, nc)) if estado._dentro(nr, nc) else None
-
-                    # Choque con orco → combate con iniciativa del jugador
-                    if sym == OGRE:
-                        orco = estado.orco_en(nr, nc)
-                        if orco:
-                            print(f"  ⚔ ¡Contacto con orco! Iniciando combate.")
-                            combate(estado, orco, primer_ataque="jugador")
-                            return True
-
-                    ok = ejecutar(estado, j, crear_accion("mover", direccion=dir_raw))
-                    if ok:
-                        consumido = True
-                    if not ok or estado.nivel_terminado:
-                        return True
-                if estado.nivel_terminado:
-                    return True
-            return consumido
+            ejecutar(estado, j, crear_accion("mover", direccion=dir_raw))
+            return True
 
         else:
             print("  ✗ 'mover' sin objetivo ni pasos.")
@@ -979,19 +970,19 @@ def interpretar_y_ejecutar(estado: Estado, data: dict) -> bool:
 # ═══════════════════════════════════════════════════════════
 
 EVAL_CASES = [
-    # 5 movimientos simples
+    # 5 movimientos simples (cantidad siempre 1)
     {"texto": "andá arriba", "esperado": {"accion": "mover", "pasos": [{"direccion": "arriba", "cantidad": 1}]}},
-    {"texto": "movete dos casilleros a la derecha", "esperado": {"accion": "mover", "pasos": [{"direccion": "derecha", "cantidad": 2}]}},
+    {"texto": "movete dos casilleros a la derecha", "esperado": {"accion": "mover", "pasos": [{"direccion": "derecha", "cantidad": 1}]}},
     {"texto": "bajá 1", "esperado": {"accion": "mover", "pasos": [{"direccion": "abajo", "cantidad": 1}]}},
-    {"texto": "caminá tres a la izquierda", "esperado": {"accion": "mover", "pasos": [{"direccion": "izquierda", "cantidad": 3}]}},
+    {"texto": "caminá tres a la izquierda", "esperado": {"accion": "mover", "pasos": [{"direccion": "izquierda", "cantidad": 1}]}},
     {"texto": "subí en diagonal a la derecha", "esperado": {"accion": "mover", "pasos": [{"direccion": "arriba-derecha", "cantidad": 1}]}},
 
-    # 5 movimientos compuestos
-    {"texto": "andá 2 arriba y 1 derecha", "esperado": {"accion": "mover", "pasos": [{"direccion": "arriba", "cantidad": 2}, {"direccion": "derecha", "cantidad": 1}]}},
-    {"texto": "bajá 1 y después movete 2 a la izquierda", "esperado": {"accion": "mover", "pasos": [{"direccion": "abajo", "cantidad": 1}, {"direccion": "izquierda", "cantidad": 2}]}},
-    {"texto": "derecha derecha abajo", "esperado": {"accion": "mover", "pasos": [{"direccion": "derecha", "cantidad": 2}, {"direccion": "abajo", "cantidad": 1}]}},
-    {"texto": "subí 1, izquierda 1 y bajá 1", "esperado": {"accion": "mover", "pasos": [{"direccion": "arriba", "cantidad": 1}, {"direccion": "izquierda", "cantidad": 1}, {"direccion": "abajo", "cantidad": 1}]}},
-    {"texto": "avanzá 2 abajo-derecha y luego 1 arriba", "esperado": {"accion": "mover", "pasos": [{"direccion": "abajo-derecha", "cantidad": 2}, {"direccion": "arriba", "cantidad": 1}]}},
+    # 5 movimientos compuestos → solo el primer paso, cantidad 1
+    {"texto": "andá 2 arriba y 1 derecha", "esperado": {"accion": "mover", "pasos": [{"direccion": "arriba", "cantidad": 1}]}},
+    {"texto": "bajá 1 y después movete 2 a la izquierda", "esperado": {"accion": "mover", "pasos": [{"direccion": "abajo", "cantidad": 1}]}},
+    {"texto": "derecha derecha abajo", "esperado": {"accion": "mover", "pasos": [{"direccion": "derecha", "cantidad": 1}]}},
+    {"texto": "subí 1, izquierda 1 y bajá 1", "esperado": {"accion": "mover", "pasos": [{"direccion": "arriba", "cantidad": 1}]}},
+    {"texto": "avanzá 2 abajo-derecha y luego 1 arriba", "esperado": {"accion": "mover", "pasos": [{"direccion": "abajo-derecha", "cantidad": 1}]}},
 
     # 3 objetivos
     {"texto": "ve al orco", "esperado": {"accion": "mover", "objetivo": "orco"}},
