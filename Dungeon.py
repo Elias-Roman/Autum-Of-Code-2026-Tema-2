@@ -182,7 +182,7 @@ class Estado:
         for r in range(SIZE):
             for c in range(SIZE):
                 if self.board[r][c] == symbol:
-                    dist = abs(jr - r) + abs(jc - c)
+                    dist = max(abs(jr - r), abs(jc - c))
                     if dist < best_dist:
                         best_dist, best_pos = dist, (r, c)
         return best_pos, best_dist
@@ -813,27 +813,33 @@ def _mover_un_paso_hacia(estado: Estado, tr: int, tc: int) -> tuple[bool, bool]:
     Devuelve (movido, combate_iniciado).
     """
     j = estado.jugador
-    dr = 0 if tr == j.r else (1 if tr > j.r else -1)
-    dc = 0 if tc == j.c else (1 if tc > j.c else -1)
-
-    # Dirección canónica (solo 4 dirs para simplicidad)
-    if dr != 0 and dc != 0:
-        # diagonal: preferir fila primero
-        dc = 0
-
-    dir_str = {(-1,0):"arriba",(1,0):"abajo",(0,-1):"izquierda",(0,1):"derecha"}.get((dr,dc))
-    if not dir_str:
+    if j.pos == (tr, tc):
         return False, False
 
-    nr, nc = j.r + dr, j.c + dc
+    def score(r, c):
+        return (max(abs(r - tr), abs(c - tc)), abs(r - tr) + abs(c - tc))
 
-    sym = estado._get((nr, nc))
+    mejor_score = score(j.r, j.c)
+    mejor_dir = None
 
-    # Orco adyacente → combate, jugador tiene iniciativa
-    if sym == OGRE:
-        return True, True
+    for dir_str, (dr, dc) in DIRS_8.items():
+        nr, nc = j.r + dr, j.c + dc
+        if not estado._dentro(nr, nc):
+            continue
 
-    ok = ejecutar(estado, j, crear_accion("mover", direccion=dir_str))
+        accion = crear_accion("mover", direccion=dir_str)
+        if not validar(estado, j, accion)["valida"]:
+            continue
+
+        candidato_score = score(nr, nc)
+        if candidato_score < mejor_score:
+            mejor_score = candidato_score
+            mejor_dir = dir_str
+
+    if mejor_dir is None:
+        return False, False
+
+    ok = ejecutar(estado, j, crear_accion("mover", direccion=mejor_dir))
     return ok, False
 
 
