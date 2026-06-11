@@ -1,0 +1,159 @@
+[gd_scene format=3 uid="uid://deh0b05tadlew"]
+
+[ext_resource type="Script" uid="uid://cy5jnpt4u7lw6" path="res://Main.gd" id="1_main"]
+
+[node name="Main" type="Control" unique_id=1196588544]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_main")
+
+[node name="GameOverPanel" type="PanelContainer" parent="." unique_id=1278660937]
+visible = false
+z_index = 10
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -200.0
+offset_top = -110.0
+offset_right = 200.0
+offset_bottom = 110.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="VBox" type="VBoxContainer" parent="GameOverPanel" unique_id=1525802874]
+layout_mode = 2
+alignment = 1
+
+[node name="ResultLabel" type="Label" parent="GameOverPanel/VBox" unique_id=1185230813]
+layout_mode = 2
+theme_override_font_sizes/font_size = 28
+text = "Resultado"
+horizontal_alignment = 1
+
+[node name="RestartBtn" type="Button" parent="GameOverPanel/VBox" unique_id=185005029]
+layout_mode = 2
+text = "Reiniciar"
+
+[node name="MarginContainer" type="MarginContainer" parent="." unique_id=1208299647]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 12
+theme_override_constants/margin_top = 12
+theme_override_constants/margin_right = 12
+theme_override_constants/margin_bottom = 12
+
+[node name="HBox" type="HBoxContainer" parent="MarginContainer" unique_id=258942107]
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="LeftPanel" type="VBoxContainer" parent="MarginContainer/HBox" unique_id=877483735]
+layout_mode = 2
+size_flags_horizontal = 0
+
+[node name="TitleLabel" type="Label" parent="MarginContainer/HBox/LeftPanel" unique_id=258451234]
+layout_mode = 2
+theme_override_font_sizes/font_size = 16
+text = "DUNGEON KNIGHT"
+horizontal_alignment = 1
+
+[node name="GridContainer" type="GridContainer" parent="MarginContainer/HBox/LeftPanel" unique_id=147586742]
+layout_mode = 2
+columns = 7
+
+[node name="RightPanel" type="VBoxContainer" parent="MarginContainer/HBox" unique_id=394661155]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_constants/separation = 8
+
+[node name="VBox" type="VBoxContainer" parent="MarginContainer/HBox/RightPanel" unique_id=1081217702]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 6
+
+[node name="HUD" type="HBoxContainer" parent="MarginContainer/HBox/RightPanel/VBox" unique_id=103855165]
+layout_mode = 2
+
+[node name="HPBar" type="ProgressBar" parent="MarginContainer/HBox/RightPanel/VBox/HUD" unique_id=4016596]
+layout_mode = 2
+size_flags_horizontal = 3
+max_value = 3.0
+value = 3.0
+
+[node name="HPLabel" type="Label" parent="MarginContainer/HBox/RightPanel/VBox/HUD" unique_id=1642308973]
+layout_mode = 2
+text = "HP: 3.0 / 3.0"
+
+[node name="OroLabel" type="Label" parent="MarginContainer/HBox/RightPanel/VBox/HUD" unique_id=1806892797]
+layout_mode = 2
+text = "Oro: 0"
+
+[node name="LlaveLabel" type="Label" parent="MarginContainer/HBox/RightPanel/VBox/HUD" unique_id=1531471267]
+layout_mode = 2
+text = "Sin llave"
+
+[node name="LogScroll" type="ScrollContainer" parent="MarginContainer/HBox/RightPanel/VBox" unique_id=1162765715]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="LogText" type="RichTextLabel" parent="MarginContainer/HBox/RightPanel/VBox/LogScroll" unique_id=135605579]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+bbcode_enabled = true
+fit_content = true
+scroll_following = true
+
+[node name="CombatPanel" type="PanelContainer" parent="MarginContainer/HBox/RightPanel/VBox" unique_id=1025295490]
+visible = false
+layout_mode = 2
+
+[node name="VBox" type="VBoxContainer" parent="MarginContainer/HBox/RightPanel/VBox/CombatPanel" unique_id=1413369357]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="CombatTitle" type="Label" parent="MarginContainer/HBox/RightPanel/VBox/CombatPanel/VBox" unique_id=327584021]
+layout_mode = 2
+theme_override_font_sizes/font_size = 16
+text = "⚔  EN COMBATE  ⚔"
+horizontal_alignment = 1
+
+[node name="OrcoHPBar" type="ProgressBar" parent="MarginContainer/HBox/RightPanel/VBox/CombatPanel/VBox" unique_id=1757194788]
+layout_mode = 2
+max_value = 2.0
+value = 2.0
+
+[node name="OrcoHPLabel" type="Label" parent="MarginContainer/HBox/RightPanel/VBox/CombatPanel/VBox" unique_id=1289621901]
+layout_mode = 2
+text = "Orco HP"
+horizontal_alignment = 1
+
+[node name="CombatHint" type="Label" parent="MarginContainer/HBox/RightPanel/VBox/CombatPanel/VBox" unique_id=573369922]
+layout_mode = 2
+text = "Escribí: atacar  ó  defensa"
+horizontal_alignment = 1
+
+[node name="ThinkingLabel" type="Label" parent="MarginContainer/HBox/RightPanel/VBox" unique_id=1413136709]
+visible = false
+modulate = Color(1, 0.8, 0.2, 1)
+layout_mode = 2
+text = "⏳ Consultando IA…"
+
+[node name="CmdInput" type="LineEdit" parent="MarginContainer/HBox/RightPanel/VBox" unique_id=256109125]
+layout_mode = 2
+placeholder_text = "Escribí un comando en lenguaje natural…"
+
+[node name="SendBtn" type="Button" parent="MarginContainer/HBox/RightPanel/VBox" unique_id=492407644]
+layout_mode = 2
+text = "Enviar  (Enter)"

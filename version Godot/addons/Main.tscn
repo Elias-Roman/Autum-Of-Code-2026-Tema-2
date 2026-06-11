@@ -1,0 +1,159 @@
+[gd_scene load_steps=2 format=3 uid="uid://dungeon_main"]
+
+[ext_resource type="Script" path="res://Main.gd" id="1_main"]
+
+[node name="Main" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+script = ExtResource("1_main")
+
+[node name="CombatOverlay" type="PanelContainer" parent="."]
+visible = false
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -220.0
+offset_top = -180.0
+offset_right = 220.0
+offset_bottom = 180.0
+
+[node name="VBox" type="VBoxContainer" parent="CombatOverlay"]
+layout_mode = 2
+
+[node name="CombatTitle" type="Label" parent="CombatOverlay/VBox"]
+layout_mode = 2
+text = "⚔  COMBATE  ⚔"
+horizontal_alignment = 1
+theme_override_font_sizes/font_size = 20
+
+[node name="OrcoHPBar" type="ProgressBar" parent="CombatOverlay/VBox"]
+layout_mode = 2
+custom_minimum_size = Vector2(400, 24)
+max_value = 2.0
+value = 2.0
+
+[node name="OrcoHPLabel" type="Label" parent="CombatOverlay/VBox"]
+layout_mode = 2
+text = "Orco HP"
+horizontal_alignment = 1
+
+[node name="CombatLog" type="Label" parent="CombatOverlay/VBox"]
+layout_mode = 2
+text = "Escribí: atacar  o  defensa"
+horizontal_alignment = 1
+autowrap_mode = 3
+
+[node name="GameOverPanel" type="PanelContainer" parent="."]
+visible = false
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -180.0
+offset_top = -100.0
+offset_right = 180.0
+offset_bottom = 100.0
+
+[node name="VBox" type="VBoxContainer" parent="GameOverPanel"]
+layout_mode = 2
+alignment = 1
+
+[node name="ResultLabel" type="Label" parent="GameOverPanel/VBox"]
+layout_mode = 2
+text = "Resultado"
+horizontal_alignment = 1
+theme_override_font_sizes/font_size = 28
+
+[node name="RestartBtn" type="Button" parent="GameOverPanel/VBox"]
+layout_mode = 2
+text = "Reiniciar"
+
+[node name="MarginContainer" type="MarginContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+theme_override_constants/margin_left = 16
+theme_override_constants/margin_top = 16
+theme_override_constants/margin_right = 16
+theme_override_constants/margin_bottom = 16
+
+[node name="HBox" type="HBoxContainer" parent="MarginContainer"]
+layout_mode = 2
+separation = 16
+
+[node name="LeftPanel" type="VBoxContainer" parent="MarginContainer/HBox"]
+layout_mode = 2
+size_flags_horizontal = 0
+
+[node name="TitleLabel" type="Label" parent="MarginContainer/HBox/LeftPanel"]
+layout_mode = 2
+text = "DUNGEON KNIGHT"
+theme_override_font_sizes/font_size = 18
+horizontal_alignment = 1
+
+[node name="GridContainer" type="GridContainer" parent="MarginContainer/HBox/LeftPanel"]
+layout_mode = 2
+columns = 7
+
+[node name="RightPanel" type="VBoxContainer" parent="MarginContainer/HBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="VBox" type="VBoxContainer" parent="MarginContainer/HBox/RightPanel"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="HUD" type="HBoxContainer" parent="MarginContainer/HBox/RightPanel/VBox"]
+layout_mode = 2
+
+[node name="HPBar" type="ProgressBar" parent="MarginContainer/HBox/RightPanel/VBox/HUD"]
+layout_mode = 2
+size_flags_horizontal = 3
+max_value = 3.0
+value = 3.0
+
+[node name="HPLabel" type="Label" parent="MarginContainer/HBox/RightPanel/VBox/HUD"]
+layout_mode = 2
+text = "HP: 3.0 / 3.0"
+
+[node name="OroLabel" type="Label" parent="MarginContainer/HBox/RightPanel/VBox/HUD"]
+layout_mode = 2
+text = "Oro: 0"
+
+[node name="LlaveLabel" type="Label" parent="MarginContainer/HBox/RightPanel/VBox/HUD"]
+layout_mode = 2
+text = "Sin llave"
+
+[node name="LogScroll" type="ScrollContainer" parent="MarginContainer/HBox/RightPanel/VBox"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="LogText" type="RichTextLabel" parent="MarginContainer/HBox/RightPanel/VBox/LogScroll"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+bbcode_enabled = true
+fit_content = true
+scroll_following = true
+
+[node name="ThinkingLabel" type="Label" parent="MarginContainer/HBox/RightPanel/VBox"]
+layout_mode = 2
+text = "⏳ Consultando IA…"
+modulate = Color(1, 0.8, 0.2, 1)
+visible = false
+
+[node name="CmdInput" type="LineEdit" parent="MarginContainer/HBox/RightPanel/VBox"]
+layout_mode = 2
+placeholder_text = "Escribí un comando en lenguaje natural…"
+
+[node name="SendBtn" type="Button" parent="MarginContainer/HBox/RightPanel/VBox"]
+layout_mode = 2
+text = "Enviar (Enter)"

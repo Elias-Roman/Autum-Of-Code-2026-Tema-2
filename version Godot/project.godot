@@ -1,0 +1,39 @@
+; Engine configuration file.
+; It's best edited using the editor UI and not directly,
+; since the parameters that go here are not all obvious.
+;
+; Format:
+;   [section] ; section goes between []
+;   param=value ; assign values to parameters
+
+config_version=5
+
+[application]
+
+config/name="DungeonKnight"
+config/description="Dungeon Knight - Juego de mazmorra 7x7 con IA por lenguaje natural"
+run/main_scene="res://Main.tscn"
+config/features=PackedStringArray("4.6", "Forward Plus")
+config/icon="res://icon.svg"
+
+[autoload]
+
+GameState="*res://GameState.gd"
+LLMBridge="*res://LLMBridge.gd"
+
+[display]
+
+window/size/viewport_width=1100
+window/size/viewport_height=700
+
+[editor]
+
+version_control/autoload_on_startup=true
+
+[physics]
+
+3d/physics_engine="Jolt Physics"
+
+[rendering]
+
+rendering_device/driver.windows="d3d12"
