@@ -135,7 +135,7 @@ GameState.gd (Autoload)
 
 LLMBridge.gd (Autoload)
   ├── Verifica Ollama al arrancar (GET /api/tags)
-  ├── POST /api/generate con prompts idénticos a Dungeon.py
+  ├── POST /api/generate con prompts compactos y JSON estructurado
   └── Parser JSON robusto con 4 intentos de extracción
 
 Main.gd + Main.tscn

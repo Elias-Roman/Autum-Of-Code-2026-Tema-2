@@ -607,7 +607,7 @@ ESQUEMAS:
 {"accion":"esperar"}
 
 REGLAS:
-- ir/ve/muévete/camina/avanza/desplázate → "mover"
+- ir/ve/muévete/movete/camina/avanza/desplázate → "mover"
 - abrir/interactuar → "abrir" si el objetivo es un cofre
 - si el jugador pide abrir o usar la puerta → {"accion":"mover","objetivo":"puerta"}
 - esperar/pasar/descansar → "esperar"
