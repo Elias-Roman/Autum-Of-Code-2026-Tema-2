@@ -16,7 +16,7 @@ if hasattr(sys.stdout, "reconfigure"):
 # ═══════════════════════════════════════════════════════════
 SIZE         = 7
 OLLAMA_URL   = "http://localhost:11434/api/generate"
-OLLAMA_MODEL = "llama3:latest"
+OLLAMA_MODEL = "phi3:latest"
 
 PLAYER = "K"
 CHEST  = "C"
@@ -638,6 +638,15 @@ def verificar_modelo():
     except requests.exceptions.ConnectionError:
         print("\n  ✗ Ollama no está corriendo. Inicialo con: ollama serve\n")
         sys.exit(1)
+    except requests.exceptions.HTTPError as e:
+        detalle = ""
+        if e.response is not None:
+            detalle = e.response.text.strip()
+        if detalle:
+            print(f"  Error HTTP de Ollama: {detalle}. Turno cancelado.")
+        else:
+            print(f"  Error HTTP de Ollama: {e}. Turno cancelado.")
+        return None, False, None
     except requests.exceptions.RequestException as e:
         print(f"\n  ✗ Error conectando con Ollama: {e}\n")
         sys.exit(1)
@@ -1012,7 +1021,20 @@ EVAL_CASES = [
 ]
 
 
+EVAL_DIRECCIONES = {
+    "arriba", "abajo", "izquierda", "derecha",
+    "arriba-izquierda", "arriba-derecha",
+    "abajo-izquierda", "abajo-derecha",
+}
+EVAL_DIRECCIONES_ABRIR = {"arriba", "abajo", "izquierda", "derecha"}
+EVAL_OBJETIVOS = {"cofre", "orco", "puerta", "llave"}
+EVAL_ACCIONES_MAPA = {"mover", "abrir", "esperar", "desconocido"}
+
+
 def _canonical_eval(data: dict) -> dict:
+    if not isinstance(data, dict):
+        return {"accion": "desconocido"}
+
     accion = str(data.get("accion", "desconocido")).lower().strip()
     if accion == "mover" and "objetivo" in data:
         return {"accion": "mover", "objetivo": str(data["objetivo"]).lower().strip()}
@@ -1040,7 +1062,129 @@ def _si_no(valor: bool) -> str:
     return "sí" if valor else "no"
 
 
-def evaluar_interpretacion():
+def _respuesta_valida_mapa(data: dict) -> bool:
+    if not isinstance(data, dict):
+        return False
+
+    accion = str(data.get("accion", "")).lower().strip()
+    if accion not in EVAL_ACCIONES_MAPA:
+        return False
+
+    if accion == "mover":
+        tiene_objetivo = "objetivo" in data
+        tiene_pasos = "pasos" in data
+        if tiene_objetivo == tiene_pasos:
+            return False
+        if tiene_objetivo:
+            return str(data.get("objetivo", "")).lower().strip() in EVAL_OBJETIVOS
+
+        pasos = data.get("pasos")
+        if not isinstance(pasos, list) or len(pasos) == 0:
+            return False
+        for paso in pasos:
+            if not isinstance(paso, dict):
+                return False
+            direccion = str(paso.get("direccion", "")).lower().strip()
+            if direccion not in EVAL_DIRECCIONES:
+                return False
+            try:
+                cantidad = int(paso.get("cantidad", 1))
+            except (TypeError, ValueError):
+                return False
+            if cantidad < 1:
+                return False
+        return True
+
+    if accion == "abrir":
+        direccion = str(data.get("direccion", "")).lower().strip()
+        return direccion in EVAL_DIRECCIONES_ABRIR
+
+    if accion in ("esperar", "desconocido"):
+        return True
+
+    return False
+
+
+def _cumple_intencion_general(obtenido: dict, esperado: dict) -> bool:
+    accion_obtenida = obtenido.get("accion", "")
+    accion_esperada = esperado.get("accion", "")
+    if accion_obtenida != accion_esperada:
+        return False
+
+    if accion_esperada == "mover":
+        if "objetivo" in esperado:
+            return obtenido.get("objetivo", "") == esperado.get("objetivo", "")
+        if "pasos" in esperado:
+            return "pasos" in obtenido and len(obtenido["pasos"]) > 0
+        return False
+
+    if accion_esperada == "abrir":
+        return "direccion" in obtenido
+
+    return True
+
+
+def _forma_optima(data: dict, esperado: dict) -> bool:
+    if not isinstance(data, dict):
+        return False
+
+    accion = esperado.get("accion", "")
+
+    if accion == "mover" and "objetivo" in esperado:
+        return (
+            set(data.keys()) == {"accion", "objetivo"}
+            and _canonical_eval(data) == esperado
+        )
+
+    if accion == "mover" and "pasos" in esperado:
+        pasos = data.get("pasos")
+        if set(data.keys()) != {"accion", "pasos"}:
+            return False
+        if not isinstance(pasos, list) or len(pasos) != 1:
+            return False
+        paso = pasos[0]
+        if not isinstance(paso, dict) or set(paso.keys()) != {"direccion", "cantidad"}:
+            return False
+        return _canonical_eval(data) == esperado
+
+    if accion == "abrir":
+        return set(data.keys()) == {"accion", "direccion"} and _canonical_eval(data) == esperado
+
+    if accion in ("esperar", "desconocido"):
+        return set(data.keys()) == {"accion"} and _canonical_eval(data) == esperado
+
+    return False
+
+
+def _evaluar_niveles(data: dict, json_valido: bool, esperado: dict) -> dict:
+    obtenido = _canonical_eval(data)
+    nivel_1 = json_valido and _respuesta_valida_mapa(data)
+    nivel_2 = nivel_1 and _cumple_intencion_general(obtenido, esperado)
+    nivel_3 = nivel_2 and _forma_optima(data, esperado)
+    return {
+        "obtenido": obtenido,
+        "n1": nivel_1,
+        "n2": nivel_2,
+        "n3": nivel_3,
+    }
+
+
+def _etiqueta_resultado(niveles: dict, esperado: dict) -> str:
+    es_rechazo = esperado.get("accion") == "desconocido"
+    if niveles["n3"]:
+        return "rechazo optimo" if es_rechazo else "respuesta optima"
+    if niveles["n2"]:
+        return "rechazo correcto" if es_rechazo else "cumple intencion general"
+    if niveles["n1"]:
+        return "JSON valido, no cumple intencion"
+    return "respuesta invalida"
+
+
+def _porcentaje(parte: int, total: int) -> float:
+    return (parte / total * 100.0) if total > 0 else 0.0
+
+
+def _evaluar_interpretacion_anterior():
     print("\nEVALUACIÓN MÍNIMA DE INTERPRETACIÓN")
     print(f"Modelo: {OLLAMA_MODEL}")
     print(f"Casos: {len(EVAL_CASES)}\n")
@@ -1095,6 +1239,89 @@ def evaluar_interpretacion():
 # ═══════════════════════════════════════════════════════════
 #  MAIN
 # ═══════════════════════════════════════════════════════════
+
+def evaluar_interpretacion():
+    print("\nEVALUACION DE INTERPRETACION EN 3 NIVELES")
+    print("N1: respuesta valida")
+    print("N2: valida y cumple la intencion general")
+    print("N3: valida, respeta la intencion y es la opcion optima")
+    print(f"Modelo: {OLLAMA_MODEL}")
+    print(f"Casos: {len(EVAL_CASES)}\n")
+
+    total = len(EVAL_CASES)
+    n1_total = 0
+    n2_total = 0
+    n3_total = 0
+    accion_total = 0
+    accion_n1 = 0
+    accion_n2 = 0
+    accion_n3 = 0
+    rechazo_total = 0
+    rechazo_n1 = 0
+    rechazo_n2 = 0
+    rechazo_n3 = 0
+    latencias = []
+
+    for i, caso in enumerate(EVAL_CASES, 1):
+        texto = caso["texto"]
+        esperado = caso["esperado"]
+        es_rechazo = esperado.get("accion") == "desconocido"
+        tipo_caso = "rechazo" if es_rechazo else "accion"
+
+        print(f"Caso {i}/{total}: {texto}")
+        data, json_valido, latencia_ms = llamar_llm_con_metricas(texto, SYSTEM_PROMPT_MAPA)
+        data = data or {"accion": "desconocido"}
+        niveles = _evaluar_niveles(data, json_valido, esperado)
+
+        n1_total += int(niveles["n1"])
+        n2_total += int(niveles["n2"])
+        n3_total += int(niveles["n3"])
+
+        if es_rechazo:
+            rechazo_total += 1
+            rechazo_n1 += int(niveles["n1"])
+            rechazo_n2 += int(niveles["n2"])
+            rechazo_n3 += int(niveles["n3"])
+        else:
+            accion_total += 1
+            accion_n1 += int(niveles["n1"])
+            accion_n2 += int(niveles["n2"])
+            accion_n3 += int(niveles["n3"])
+
+        if latencia_ms is not None:
+            latencias.append(latencia_ms)
+
+        latencia_txt = f"{latencia_ms:.0f} ms" if latencia_ms is not None else "n/a"
+        etiqueta = _etiqueta_resultado(niveles, esperado)
+        print(
+            "  N1 %s | N2 %s | N3 %s | %s | %s | %s"
+            % (
+                _si_no(niveles["n1"]),
+                _si_no(niveles["n2"]),
+                _si_no(niveles["n3"]),
+                latencia_txt,
+                tipo_caso,
+                etiqueta,
+            )
+        )
+        print(f"    Esperado: {esperado}")
+        print(f"    Obtenido: {niveles['obtenido']}\n")
+
+    lat_media = sum(latencias) / len(latencias) if latencias else 0.0
+    print("RESUMEN")
+    print(f"  N1 respuesta valida: {n1_total}/{total} ({_porcentaje(n1_total, total):.1f}%)")
+    print(f"  N2 intencion general: {n2_total}/{total} ({_porcentaje(n2_total, total):.1f}%)")
+    print(f"  N3 respuesta optima: {n3_total}/{total} ({_porcentaje(n3_total, total):.1f}%)")
+    print("  Acciones del juego:")
+    print(f"    N1: {accion_n1}/{accion_total} ({_porcentaje(accion_n1, accion_total):.1f}%)")
+    print(f"    N2: {accion_n2}/{accion_total} ({_porcentaje(accion_n2, accion_total):.1f}%)")
+    print(f"    N3: {accion_n3}/{accion_total} ({_porcentaje(accion_n3, accion_total):.1f}%)")
+    print("  Rechazos esperados:")
+    print(f"    N1: {rechazo_n1}/{rechazo_total} ({_porcentaje(rechazo_n1, rechazo_total):.1f}%)")
+    print(f"    N2 rechazo correcto: {rechazo_n2}/{rechazo_total} ({_porcentaje(rechazo_n2, rechazo_total):.1f}%)")
+    print(f"    N3 rechazo optimo: {rechazo_n3}/{rechazo_total} ({_porcentaje(rechazo_n3, rechazo_total):.1f}%)")
+    print(f"  Latencia media: {lat_media:.0f} ms\n")
+
 
 AYUDA = """
 ╔══════════════════════════════════════════════════╗
